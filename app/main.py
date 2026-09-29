@@ -329,13 +329,14 @@ def converse(intake_id: UUID, body: ConversationInput, request: Request):
             people = conversation_people(conn, intake_id)
             preferred = str(intake['capture_active_id']) if intake['capture_active_id'] else None
             version = intake['capture_version']
+            session_email = conn.execute('SELECT email FROM users WHERE id=%s', (user_id,)).fetchone()['email']
             history_rows = conn.execute("SELECT user_message,response_json FROM capture_turns WHERE intake_id=%s AND status='complete' ORDER BY created_at DESC LIMIT 4", (intake_id,)).fetchall()
             history = [{'user': r['user_message'], 'assistant': r['response_json']['reply']} for r in reversed(history_rows)]
     try:
-        context, history = context_for_turn(people, preferred, history, body.question)
+        context, history = context_for_turn(people, preferred, history, body.question, session_email)
         proposal = call_agent(message, context, history)
         proposal, alignment = align_direct_answer(proposal, people, message, preferred, context['current_question']['text'])
-        updated, audit, active = apply_proposal(people, proposal, message, preferred)
+        updated, audit, active = apply_proposal(people, proposal, message, preferred, session_email)
         if alignment:
             audit.append(alignment)
         links = []

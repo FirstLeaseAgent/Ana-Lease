@@ -54,22 +54,27 @@ def person_hint(person):
     return label + (' · ' + masked_name(name) if isinstance(name, str) else '')
 
 
-def context_for(people, preferred=None):
+def context_for(people, preferred=None, session_email=None):
     active = active_person(people, preferred)
-    return {'version': 1, 'active_participant_id': active, 'participants': [
+    context = {'version': 1, 'active_participant_id': active, 'participants': [
         {'id': pid, 'role': p['role'], 'subject_type': p['subject_type'], 'hint': person_hint(p),
          'known_fields': sorted(list(p['answers']) + (['rfc'] if p.get('rfc') else [])),
          'missing_fields': missing(p)} for pid, p in people.items()
     ]}
+    if session_email:
+        context['participants'].append({'id':'session_user','role':'usuario_verificado','subject_type':'PF',
+            'hint':'Usuario que inició sesión · correo verificado',
+            'known_fields':['correo_contacto'],'missing_fields':[]})
+    return context
 
 
-def context_for_turn(people, preferred, history, shown_question=None):
+def context_for_turn(people, preferred, history, shown_question=None, session_email=None):
     canonical = resume_reply(people, preferred)
     question = shown_question or canonical
     last_reply = history[-1].get('assistant') if history else None
     if question not in (canonical, last_reply):
         raise InvalidProposal('La pregunta cambió; recarga para continuar')
-    context = context_for(people, preferred)
+    context = context_for(people, preferred, session_email)
     active = context['active_participant_id']
     field = missing(people[active])[0] if active and question == canonical else None
     context['current_question'] = {'text': question, 'participant_id': active, 'field': field}
@@ -135,7 +140,7 @@ def reply_after_proposal(proposal, people, audit, preferred=None):
     return redact_reply(proposal['reply'], people)
 
 
-def apply_proposal(people, proposal, message, preferred=None):
+def apply_proposal(people, proposal, message, preferred=None, session_email=None):
     """Return a full validated snapshot and audit trail; caller commits atomically."""
     if not isinstance(proposal, dict) or set(proposal) != {'reply', 'actions'}:
         raise InvalidProposal('Respuesta de IA no reconocida')
@@ -188,13 +193,20 @@ def apply_proposal(people, proposal, message, preferred=None):
         field = action['field']
         if kind == 'reuse_field':
             source_id = action['source_id']
-            if source_id not in people or field not in COMMON_FIELDS or action['value'] is not None:
+            if field not in COMMON_FIELDS or action['value'] is not None:
                 raise InvalidProposal('El origen no pertenece a esta solicitud o el campo no se puede reutilizar')
-            source = result[source_id]
-            # Company contact fields are not a distinct physical contact identity.
-            if field != 'rfc' and source['subject_type'] != 'PF':
-                raise InvalidProposal('Los datos de una empresa no identifican a la persona de contacto')
-            value = source.get('rfc') if field == 'rfc' else source['answers'].get(field)
+            if source_id == 'session_user':
+                if field != 'correo_contacto' or not session_email:
+                    raise InvalidProposal('Solo se puede reutilizar el correo verificado de tu sesión')
+                value = session_email
+            else:
+                if source_id not in people:
+                    raise InvalidProposal('El origen no pertenece a esta solicitud')
+                source = result[source_id]
+                # Explicitly shared contact channels do not imply the same identity.
+                if field == 'nombre' and source['subject_type'] != 'PF':
+                    raise InvalidProposal('La razón social no es el nombre de una persona')
+                value = source.get('rfc') if field == 'rfc' else source['answers'].get(field)
             if not value:
                 raise InvalidProposal('Ese dato todavía no está capturado')
         else:

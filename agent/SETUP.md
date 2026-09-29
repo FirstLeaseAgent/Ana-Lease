@@ -11,6 +11,8 @@ El servidor y el flujo de n8n están preparados. La IA permanece desactivada has
 5. Publicar el flujo y probar su webhook con `agent/test-context.json`, que contiene únicamente datos ficticios y metadatos, sin respuestas personales.
 6. Resultado esperado: propuesta de agregar un representante y reutilizar nombre, correo y teléfono del contacto; el texto debe pedir el RFC, ya que ese dato no está disponible. Esta prueba del webhook no guarda nada en la base del portal.
 
+Al actualizar el piloto, reemplazar el campo `instructions` del nodo **Instrucciones del agente** con el contenido completo de `agent/system-prompt.txt`, guardar y publicar. No reimportar el flujo sobre credenciales ya configuradas. El servidor entrega la pregunta actualmente visible en `context.current_question`, y agrega un candidato `session_user` con solo metadatos del correo autenticado. «Mi correo» permite copiar ese correo únicamente por petición del usuario. «El mismo del solicitante» permite compartir correo o teléfono de los participantes de esta solicitud; no copia razón social como nombre ni infiere identidad.
+
 El flujo no conserva entradas ni salidas en ejecuciones exitosas o fallidas y envía `store:false` a OpenAI. Esto no equivale a una política de retención cero del proveedor. No solicita consultas a Syntage por su cuenta; el servidor continúa usando el flujo existente al aceptar el RFC de un solicitante o aval.
 
 ## Activar solo para pruebas

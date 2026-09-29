@@ -124,11 +124,36 @@ class ConversationTest(unittest.TestCase):
         with self.assertRaises(c.InvalidProposal):
             c.apply_proposal(self.people,{'reply':'Continúa','actions':[action('add_participant','new',role='representante',evidence='Hola')]},'Hola')
 
-    def test_company_data_cannot_be_used_as_personal_contact(self):
-        self.people['company']=person('company','solicitante','PM',correo_contacto='empresa@example.test')
-        proposal={'reply':'Continúa','actions':[action('add_participant','new',role='representante'),action('reuse_field','new','correo_contacto',source='company')]}
+    def test_company_name_cannot_be_used_as_personal_name(self):
+        self.people['company']=person('company','solicitante','PM',nombre='Empresa de prueba')
+        proposal={'reply':'Continúa','actions':[action('add_participant','new',role='representante'),action('reuse_field','new','nombre',source='company')]}
         with self.assertRaises(c.InvalidProposal):
             c.apply_proposal(self.people,proposal,'El representante es el mismo contacto')
+
+    def test_contact_can_explicitly_reuse_applicant_contact_email(self):
+        self.people['company']=person('company','solicitante','PM',correo_contacto='empresa@example.test')
+        self.people['contact']['answers'].pop('correo_contacto')
+        message='el mismo del solicitante'
+        proposal={'reply':'Continuamos','actions':[action('reuse_field','contact','correo_contacto',source='company',evidence=message)]}
+        updated,audit,active=c.apply_proposal(self.people,proposal,message,'contact')
+        self.assertEqual(updated['contact']['answers']['correo_contacto'],'empresa@example.test')
+        self.assertEqual(audit[0]['source_id'],'company')
+        self.assertEqual(c.missing(updated['contact']),[])
+
+    def test_my_email_comes_only_from_authenticated_session_without_model_value(self):
+        self.people['contact']['answers'].pop('correo_contacto')
+        message='el mismo mio'
+        proposal={'reply':'Continuamos','actions':[action('reuse_field','contact','correo_contacto',source='session_user',evidence=message)]}
+        context=c.context_for(self.people,'contact',session_email='verified@example.test')
+        self.assertNotIn('verified@example.test',json.dumps(context))
+        self.assertEqual(context['participants'][-1]['known_fields'],['correo_contacto'])
+        updated,audit,_=c.apply_proposal(self.people,proposal,message,'contact',session_email='verified@example.test')
+        self.assertEqual(updated['contact']['answers']['correo_contacto'],'verified@example.test')
+        self.assertEqual(audit[0]['source_id'],'session_user')
+        with self.assertRaises(c.InvalidProposal):c.apply_proposal(self.people,proposal,message,'contact')
+        bad=copy.deepcopy(proposal)
+        bad['actions'][0]['field']='nombre'
+        with self.assertRaises(c.InvalidProposal):c.apply_proposal(self.people,bad,message,'contact',session_email='verified@example.test')
 
     def test_rfc_sets_aval_type_and_representative_rejects_company_rfc(self):
         message='Agregar aval ABC010101AB1'
