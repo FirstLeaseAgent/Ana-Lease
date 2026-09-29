@@ -80,18 +80,29 @@ return [{json: {valid, rfc: valid ? rfc : undefined, person_type: valid ? (rfc.l
     ]),
     code("Evaluar SAT", 1330, 220, """
 const input = $('Validar RFC').first().json;
-const e = $('Consultar entidades').first().json;
-const c = $input.first().json;
-const collection = x => x && Array.isArray(x['hydra:member']) && !x.error && !x.message;
-if (!collection(e) || !collection(c)) {
+function unpack(items, kind, limit) {
+  const rows = items.map(item => item.json);
+  if (rows.length === 1 && Array.isArray(rows[0]?.['hydra:member'])) {
+    return {members:rows[0]['hydra:member'],
+            partial:!!rows[0]['hydra:view']?.['hydra:next']};
+  }
+  // Some n8n HTTP Request configurations emit one item per record.
+  if (rows.length && rows.every(x => kind === 'entity'
+      ? typeof x?.taxpayer?.id === 'string'
+      : typeof x?.rfc === 'string' && typeof x?.status === 'string')) {
+    return {members:rows,partial:rows.length >= limit};
+  }
+  return null;
+}
+const e = unpack($('Consultar entidades').all(), 'entity', 100);
+const c = unpack($input.all(), 'credential', 100);
+if (!e || !c) {
   return [{json: {ok:false, error:'syntage_unavailable'}}];
 }
-const exact = e['hydra:member'].filter(x => String(x?.taxpayer?.id || '').toUpperCase() === input.rfc);
-const credential = c['hydra:member'].filter(x => String(x?.rfc || '').toUpperCase() === input.rfc);
-const partialEntityPage = !!e['hydra:view']?.['hydra:next'];
-const partialCredentialPage = !!c['hydra:view']?.['hydra:next'];
-if (exact.length > 1 || (exact.length === 0 && partialEntityPage) ||
-    (!credential.some(x => x.status === 'valid') && partialCredentialPage)) {
+const exact = e.members.filter(x => String(x?.taxpayer?.id || '').toUpperCase() === input.rfc);
+const credential = c.members.filter(x => String(x?.rfc || '').toUpperCase() === input.rfc);
+if (exact.length > 1 || e.partial ||
+    (!credential.some(x => x.status === 'valid') && c.partial)) {
   return [{json: {ok:false, error:'review_required'}}];
 }
 const statuses = credential.map(x => x.status);
@@ -123,17 +134,25 @@ return [{json: {
     code("Resultado con Buro", 2010, 130, """
 const base = $('Evaluar SAT').first().json;
 if (!base.ok) return [{json:{ok:false,error:base.error}}];
-const data = $input.first().json;
-if (!Array.isArray(data?.['hydra:member']) || data.error || data.message) {
+const rows = $input.all().map(item => item.json);
+let authorizations, partial;
+if (rows.length === 1 && Array.isArray(rows[0]?.['hydra:member'])) {
+  authorizations = rows[0]['hydra:member'];
+  partial = !!rows[0]['hydra:view']?.['hydra:next'];
+} else if (rows.length && rows.every(x => typeof x?.rfc === 'string' &&
+                                                typeof x?.isValid === 'boolean')) {
+  authorizations = rows;
+  partial = rows.length >= 1000;
+} else {
   return [{json:{ok:false,error:'syntage_unavailable'}}];
 }
 const now = Date.now();
-const authorized = data['hydra:member'].some(a =>
+const authorized = authorizations.some(a =>
   String(a?.rfc || '').toUpperCase() === base.rfc &&
   a.isValid === true && !a.deletedAt &&
   Number.isFinite(Date.parse(a.authorizedUntil)) && Date.parse(a.authorizedUntil) > now
 );
-if (!authorized && data['hydra:view']?.['hydra:next']) {
+if (!authorized && partial) {
   return [{json:{ok:false,error:'review_required'}}];
 }
 const buro = authorized ? 'valid' : 'missing';
