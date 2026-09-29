@@ -1,6 +1,6 @@
 # AnaLease · captura inicial aislada
 
-Primer tramo funcional para desplegar en **recursos nuevos**. No importa datos de los servicios actuales, no llama al webhook antiguo de n8n y no consulta Syntage ni SharePoint. Contiene el flujo n8n **nuevo y exclusivo** que ya se configuró y probó para entregar códigos por correo. El portal no está desplegado.
+Primer tramo funcional desplegado en **recursos nuevos** de Render. No importa datos de los servicios actuales, no llama al webhook antiguo de n8n y todavía no consulta Syntage ni SharePoint. El flujo n8n **nuevo y exclusivo** entrega los códigos por correo.
 
 ## Alcance actual
 
@@ -29,9 +29,9 @@ El backend genera y guarda únicamente el hash del código. Hace un POST servido
 
 Si la credencial existente es del nodo SMTP «Send Email» con usuario y contraseña de Microsoft 365, revisar si realmente funciona: [n8n indica](https://docs.n8n.io/integrations/builtin/credentials/send-email/outlook/) que ese método dejó de ser válido para Microsoft 365. El nodo [Microsoft Outlook](https://docs.n8n.io/integrations/builtin/app-nodes/n8n-nodes-base.microsoftoutlook) admite el envío con la credencial OAuth2 ya conectada. n8n gestiona la integración del proveedor; la aplicación en Render no llama a Microsoft Graph. Si la credencial existente corresponde a otro proveedor, cambiar solo el nodo de envío después de importarlo.
 
-## Configuración de Render pendiente de publicación
+## Configuración de Render
 
-`render.yaml` propone exclusivamente `analease-captura-web` y `analease-captura-db` en Oregon. Se debe revisar el costo de ambos planes, el nombre del dominio y el flujo n8n nuevo antes de sincronizar. En Render el origen se obtiene automáticamente de `RENDER_EXTERNAL_URL`; no se debe configurar `PUBLIC_ORIGIN` salvo que se use un dominio propio. Se desactivó el despliegue automático del servicio. **Nunca sincronizar este Blueprint con un recurso existente ni apuntar `DATABASE_URL` a `cartera-historica-db`.**
+`analease-captura-web` y `analease-captura-db` son recursos nuevos y aislados en Oregon. El portal está en `https://analease-captura-web.onrender.com`. En Render el origen se obtiene automáticamente de `RENDER_EXTERNAL_URL`; no se debe configurar `PUBLIC_ORIGIN` salvo que se use un dominio propio. Se desactivó el despliegue automático del servicio. **Nunca sincronizar este Blueprint con un recurso existente ni apuntar `DATABASE_URL` a `cartera-historica-db`.**
 
 `.python-version` fija Python 3.13.5 porque la versión de `psycopg[binary,pool]` de esta entrega no tiene distribución binaria para la versión 3.14 elegida por defecto en servicios nuevos de Render.
 
@@ -40,9 +40,9 @@ Los planes propuestos cuestan aproximadamente **USD 13/mes** por servicio web y 
 ## Próximas etapas
 
 1. Consultar Syntage por cada RFC de solicitante y aval, sin consultar al SAT para verificar existencia del RFC. La presencia de una entidad en Syntage no implica que tenga autorización: revisar por separado las credenciales SAT filtradas por RFC y su estado (`valid`, `pending`, `waiting`, `invalid`, `disabled`, `error`) y la autorización de Buró que corresponda. Los filtros de Syntage pueden devolver coincidencias parciales: comprobar la igualdad exacta del RFC antes de decidir. No exponer la existencia de una entidad ni datos obtenidos de Syntage en el portal público.
-2. Si hace falta consentimiento o una credencial utilizable, ofrecer el flujo de onboarding de Syntage configurado para la organización. No asumir que `POST /entities` siempre devuelve `onboardingUrl` cuando se proporciona RFC; determinar y probar la liga real de onboarding de SAT y, por separado, la de Buró. No recoger contraseñas CIEC ni material de e.firma en AnaLease.
+2. Si hace falta consentimiento o una credencial utilizable, ofrecer la liga **genérica** de onboarding de Syntage correspondiente al tipo inferido del RFC: 13 caracteres para persona física y 12 para persona moral. Las ligas confirmadas son [persona moral](https://registro.syntage.com/8de4ef?reporteDeCredito=true&personType=legal) y [persona física](https://registro.syntage.com/8de4ef?reporteDeCredito=true&personType=physical). El valor `physicaly` de la primera liga compartida para PF era un error y se corrige a `physical`. Las ligas se configurarán en el servicio, sin crear una por expediente ni depender del `onboardingUrl` de `POST /entities`. Comprobar por separado el estado SAT y la autorización de Buró; la presencia de `reporteDeCredito=true` en la URL no prueba por sí misma que estén vigentes. No recoger contraseñas CIEC ni material de e.firma en AnaLease.
 3. Captura y almacenamiento privado de documentos; validación de formato y análisis de archivos.
 4. Reglas de requisitos completas a partir de las tablas actuales de campos y documentos, con bucles por RFC y estados de revisión. El conjunto de campos de esta entrega es deliberadamente pequeño.
 5. Integración posterior con SharePoint y conciliación interna entre capturas de distintos correos, expediente y revisión humana. Expiración de capturas inconclusas.
 
-El código se conserva en una rama nueva de `FirstLeaseAgent/Ana-Lease`, sin reemplazar la página HTML de prueba de `main`. El repositorio actualmente es público; no se deben agregar datos de clientes ni secretos. El despliegue solo se hará conectando la rama nueva con recursos nuevos en Render.
+El código se conserva en la rama `portal-otp-render` de `FirstLeaseAgent/Ana-Lease`, sin reemplazar la página HTML de prueba de `main`. El repositorio actualmente es público; no se deben agregar datos de clientes ni secretos. Render despliega esta rama solo cuando se dispara manualmente.
