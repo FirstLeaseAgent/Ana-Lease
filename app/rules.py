@@ -24,3 +24,7 @@ def normalized_rfc(value: str) -> tuple[str, str]:
 
 def allowed_field(role: str, subject_type: str, field: str) -> bool:
     return field in FIELDS.get(role, {}).get(subject_type, set())
+
+def masked_name(value: str) -> str:
+    """Give a recognizable hint without returning the captured name."""
+    return re.sub(r'[\wÑñ]+', lambda match: match.group(0)[:1] + '*' * (len(match.group(0)) - 1), value[:120])

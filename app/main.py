@@ -13,7 +13,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from .rules import FIELDS, allowed_field, normalized_rfc
+from .rules import FIELDS, allowed_field, masked_name, normalized_rfc
 from .mail import send_code
 
 pool = ConnectionPool(conninfo=os.environ.get('DATABASE_URL', ''), min_size=0, max_size=5, open=False, kwargs={'row_factory': dict_row})
@@ -81,7 +81,7 @@ def owner(request: Request) -> str:
     return str(row['user_id'])
 
 def intake_for_owner(conn, intake_id: UUID, user_id: str, editable=False):
-    row = conn.execute('SELECT id, rfc, status FROM intakes WHERE id=%s AND owner_id=%s FOR UPDATE', (intake_id, user_id)).fetchone()
+    row = conn.execute('SELECT id, status FROM intakes WHERE id=%s AND owner_id=%s FOR UPDATE', (intake_id, user_id)).fetchone()
     if not row:
         raise HTTPException(404, 'Captura no encontrada')
     if editable and row['status'] != 'open':
@@ -170,8 +170,8 @@ def logout(request: Request, response: Response):
 def list_intakes(request: Request):
     user_id = owner(request)
     with pool.connection() as conn:
-        rows = conn.execute('SELECT id,rfc,status,updated_at FROM intakes WHERE owner_id=%s ORDER BY updated_at DESC LIMIT 30', (user_id,)).fetchall()
-    return {'intakes': rows}
+        has_intakes = conn.execute('SELECT 1 FROM intakes WHERE owner_id=%s LIMIT 1', (user_id,)).fetchone() is not None
+    return {'has_intakes': has_intakes}
 
 @app.post('/intakes')
 def create_intake(body: RfcInput, request: Request):
@@ -191,8 +191,19 @@ def read_intake(intake_id: UUID, request: Request):
     user_id = owner(request)
     with pool.connection() as conn:
         intake = intake_for_owner(conn, intake_id, user_id)
-        people = conn.execute('SELECT id,role,subject_type,rfc FROM participants WHERE intake_id=%s ORDER BY created_at,id', (intake_id,)).fetchall()
-        answers = conn.execute('SELECT participant_id,field_code,value_json FROM answers WHERE intake_id=%s', (intake_id,)).fetchall()
+        people = conn.execute('SELECT id,role,subject_type FROM participants WHERE intake_id=%s ORDER BY created_at,id', (intake_id,)).fetchall()
+        answers = conn.execute('SELECT participant_id,field_code FROM answers WHERE intake_id=%s', (intake_id,)).fetchall()
+        names = conn.execute("SELECT participant_id,value_json FROM answers WHERE intake_id=%s AND field_code IN ('nombre','razon_social')", (intake_id,)).fetchall()
+    hints = {row['participant_id']: masked_name(row['value_json']) for row in names if isinstance(row['value_json'], str)}
+    counts = {'aval': 0, 'representante': 0}
+    for person in people:
+        role = person['role']
+        if role in counts:
+            counts[role] += 1
+        label = role.capitalize() + (f' {counts[role]}' if role in counts else '')
+        person['context'] = f'{label} ({person["subject_type"]})'
+        if person['id'] in hints:
+            person['context'] += f' · {hints[person["id"]]}'
     return {'intake': intake, 'participants': people, 'answers': answers,
             'fields': {str(p['id']): sorted(FIELDS[p['role']][p['subject_type']]) for p in people}}
 

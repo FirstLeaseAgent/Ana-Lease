@@ -9,7 +9,7 @@ function bubble(value,mine=false){const el=document.createElement('div');el.clas
 function ask(value,type='text'){bubble(value);prompt.textContent='Tu respuesta';field.type=type;field.value='';field.focus();}
 function status(value){notice.textContent=value;}
 async function api(path, method='GET', data){const res=await fetch(path,{method,headers:{'Content-Type':'application/json'},credentials:'same-origin',body:data?JSON.stringify(data):undefined});const out=await res.json();if(!res.ok)throw Error(out.detail||'No pudimos completar la operación');return out;}
-async function showOwnIntakes(){const data=await api('/intakes');if(data.intakes.length){bubble('Puedes continuar una solicitud que ya empezaste. Escribe su RFC, o el RFC de una nueva solicitud.');}else{bubble('Comencemos. ¿Cuál es el RFC del solicitante?');}state.step='rfc';field.type='text';field.value='';field.focus();}
+async function showOwnIntakes(){const data=await api('/intakes');if(data.has_intakes){bubble('Puedes continuar una solicitud que ya empezaste. Escribe su RFC, o el RFC de una nueva solicitud.');}else{bubble('Comencemos. ¿Cuál es el RFC del solicitante?');}state.step='rfc';field.type='text';field.value='';field.focus();}
 function nextQuestion(){if(state.index>=state.questions.length){state.step='more';ask('Guardé este avance. Si deseas agregar un aval, escribe “aval”. Si deseas agregar un representante, escribe “representante”. También puedes salir y regresar después.');return;}const code=state.questions[state.index];state.step='answer';ask(labels[code]||'Proporciona '+code.replaceAll('_',' '));}
 async function loadIntake(id){
   const data=await api('/intakes/'+id);
@@ -20,12 +20,12 @@ async function loadIntake(id){
   for(const person of data.participants){
     const done=new Set(data.answers.filter(a=>a.participant_id===person.id).map(a=>a.field_code));
     const pending=data.fields[person.id].filter(code=>!done.has(code));
-    if(pending.length){state.participant=person;state.questions=pending;break;}
+    if(pending.length){state.participant=person;state.questions=pending;bubble('Estamos completando la información de '+person.context+'.');break;}
   }
   nextQuestion();
 }
 ask('Hola. Para continuar, escribe tu correo. Te enviaremos un código de un solo uso.','email');
-form.addEventListener('submit',async e=>{e.preventDefault();const value=field.value.trim();if(!value)return;const button=form.querySelector('button');button.disabled=true;status('');bubble(state.step==='code'?'••••••':value,true);
+form.addEventListener('submit',async e=>{e.preventDefault();const value=field.value.trim();if(!value)return;const button=form.querySelector('button');button.disabled=true;status('');bubble(['code','answer'].includes(state.step)?'••••••':value,true);
   try{
     if(state.step==='email'){state.email=value;await api('/auth/start','POST',{email:value});state.step='code';ask('Escribe el código de seis dígitos que enviamos a tu correo.','text');field.inputMode='numeric';}
     else if(state.step==='code'){await api('/auth/verify','POST',{email:state.email,code:value});field.inputMode='text';await showOwnIntakes();}
