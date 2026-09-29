@@ -28,3 +28,7 @@ services:
         value: https://flagent.app.n8n.cloud/webhook/analease-otp-send
       - key: N8N_MAIL_WEBHOOK_TOKEN
         sync: false
+      - key: N8N_SYNTAGE_WEBHOOK_URL
+        value: https://flagent.app.n8n.cloud/webhook/analease-syntage-status
+      - key: N8N_SYNTAGE_WEBHOOK_TOKEN
+        sync: false
