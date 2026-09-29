@@ -3,10 +3,10 @@ const form = document.querySelector('#composer');
 const field = document.querySelector('#answer');
 const prompt = document.querySelector('#prompt');
 const notice = document.querySelector('#notice');
-const state = {step:'email', email:'', intake:null, participant:null, questions:[], index:0};
+const state = {step:'email', email:'', intake:null, pendingIntakeId:null, participant:null, questions:[], index:0};
 const labels = {razon_social:'¿Cuál es la razón social?', nombre:'¿Cuál es el nombre completo?', nombre_comercial:'¿Cuál es el nombre comercial?', pagina_web:'¿Cuál es su página web?', correo_contacto:'¿Cuál es el correo de contacto?', telefono:'¿Cuál es el teléfono?', actividad:'¿A qué se dedica?', ocupacion:'¿Cuál es su ocupación?',cargo:'¿Cuál es su cargo?'};
 function bubble(value,mine=false){const el=document.createElement('div');el.className='bubble'+(mine?' mine':'');el.textContent=value;convo.append(el);el.scrollIntoView({block:'end'});}
-function authorization(url){if(!url)return;const el=document.createElement('div');el.className='bubble';el.append('Para completar las autorizaciones, abre la liga de Syntage: ');const link=document.createElement('a');link.href=url;link.textContent='Autorizar en Syntage';link.target='_blank';link.rel='noopener noreferrer';el.append(link);convo.append(el);el.scrollIntoView({block:'end'});}
+function authorization(url,id){if(!url)return false;state.pendingIntakeId=id;state.step='authorization_ack';const el=document.createElement('div');el.className='bubble';el.append('Para poder revisar tu información fiscal y de Buró de Crédito, es necesario completar las autorizaciones requeridas en Syntage: ');const link=document.createElement('a');link.href=url;link.textContent='Abrir autorización en Syntage';link.target='_blank';link.rel='noopener noreferrer';el.append(link);convo.append(el);ask('Puedes seguir capturando tus datos mientras realizas la autorización. Escribe OK para confirmar que viste este aviso y continuar. OK no sustituye la autorización en Syntage.');return true;}
 function ask(value,type='text'){bubble(value);prompt.textContent='Tu respuesta';field.type=type;field.value='';field.focus();}
 function status(value){notice.textContent=value;}
 async function api(path, method='GET', data){const res=await fetch(path,{method,headers:{'Content-Type':'application/json'},credentials:'same-origin',body:data?JSON.stringify(data):undefined});const out=await res.json();if(!res.ok)throw Error(out.detail||'No pudimos completar la operación');return out;}
@@ -30,9 +30,10 @@ form.addEventListener('submit',async e=>{e.preventDefault();const value=field.va
   try{
     if(state.step==='email'){state.email=value;await api('/auth/start','POST',{email:value});state.step='code';ask('Escribe el código de seis dígitos que enviamos a tu correo.','text');field.inputMode='numeric';}
     else if(state.step==='code'){await api('/auth/verify','POST',{email:state.email,code:value});field.inputMode='text';await showOwnIntakes();}
-    else if(state.step==='rfc'){const result=await api('/intakes','POST',{rfc:value});bubble('Gracias. Vamos a completar los datos de esta solicitud.');authorization(result.authorization_url);await loadIntake(result.id);}
+    else if(state.step==='rfc'){const result=await api('/intakes','POST',{rfc:value});bubble('Gracias. Vamos a completar los datos de esta solicitud.');if(!authorization(result.authorization_url,result.id))await loadIntake(result.id);}
+    else if(state.step==='authorization_ack'){if(value.toUpperCase()!=='OK'){ask('Para continuar, escribe OK. La autorización se realiza por separado en la liga de Syntage.');}else{await loadIntake(state.pendingIntakeId);state.pendingIntakeId=null;}}
     else if(state.step==='answer'){await api(`/intakes/${state.intake}/participants/${state.participant.id}/answers`,'PUT',{field_code:state.questions[state.index],value});state.index++;if(state.index>=state.questions.length)await loadIntake(state.intake);else nextQuestion();}
     else if(state.step==='more'){const role=value.toLowerCase();if(!['aval','representante'].includes(role)){ask('Tu avance está guardado. Para agregar a alguien escribe “aval” o “representante”.');}else{state.newRole=role;state.step='participant_rfc';ask(role==='aval'?'¿Cuál es el RFC del aval?':'¿Cuál es el RFC del representante?');}}
-    else if(state.step==='participant_rfc'){const result=await api('/intakes/'+state.intake+'/participants','POST',{role:state.newRole,rfc:value});authorization(result.authorization_url);await loadIntake(state.intake);}
+    else if(state.step==='participant_rfc'){const result=await api('/intakes/'+state.intake+'/participants','POST',{role:state.newRole,rfc:value});if(!authorization(result.authorization_url,state.intake))await loadIntake(state.intake);}
   }catch(err){status(err.message);field.value=value;}finally{button.disabled=false;}
 });
