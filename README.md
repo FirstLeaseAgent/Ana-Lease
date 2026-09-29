@@ -5,7 +5,7 @@ Primer tramo funcional para desplegar en **recursos nuevos**. No importa datos d
 ## Alcance actual
 
 - Correo con código de seis dígitos, un solo uso, 10 minutos y cinco intentos. Máximo diez solicitudes por hora por correo y cien por dirección de origen, con intervalo mínimo de un minuto por correo. Antes de abrirlo a clientes se debe revisar la identificación de IP detrás del proxy de Render y el límite con tráfico real.
-- Cookie de sesión de 14 días, HttpOnly, Secure y SameSite=Lax. `PUBLIC_ORIGIN` se compara con Origin para escrituras.
+- Cookie de sesión de 14 días, HttpOnly, Secure y SameSite=Lax. El origen se toma de `RENDER_EXTERNAL_URL` en Render (o `PUBLIC_ORIGIN` al ejecutar fuera de Render) y se compara con Origin para escrituras.
 - Cada correo ve y edita sus propias capturas. Un segundo correo con el mismo RFC crea una captura independiente; el servidor no muestra información de otra cuenta ni datos maestros existentes.
 - Solicitante persona física o moral; hasta tres avales PF/PM; representantes PF. Preguntas según rol y tipo; respuesta guardada después de cada turno.
 
@@ -31,7 +31,7 @@ Si la credencial existente es del nodo SMTP «Send Email» con usuario y contras
 
 ## Configuración de Render pendiente de publicación
 
-`render.yaml` propone exclusivamente `analease-captura-web` y `analease-captura-db` en Oregon. Se debe revisar el costo de ambos planes, el nombre del dominio y el flujo n8n nuevo antes de sincronizar. El valor `PUBLIC_ORIGIN` debe ser el origen HTTPS exacto de la nueva URL. Se desactivó el despliegue automático. **Nunca sincronizar este Blueprint con un recurso existente ni apuntar `DATABASE_URL` a `cartera-historica-db`.**
+`render.yaml` propone exclusivamente `analease-captura-web` y `analease-captura-db` en Oregon. Se debe revisar el costo de ambos planes, el nombre del dominio y el flujo n8n nuevo antes de sincronizar. En Render el origen se obtiene automáticamente de `RENDER_EXTERNAL_URL`; no se debe configurar `PUBLIC_ORIGIN` salvo que se use un dominio propio. Se desactivó el despliegue automático del servicio. **Nunca sincronizar este Blueprint con un recurso existente ni apuntar `DATABASE_URL` a `cartera-historica-db`.**
 
 Los planes propuestos cuestan aproximadamente **USD 13/mes** por servicio web y base (USD 7 + USD 6), sin contar almacenamiento superior al incluido, transferencia adicional ni otros cargos del workspace. Consultar el [precio vigente de Render](https://render.com/pricing) antes de aplicar. La app comprueba conexión a la base en `/health`, por lo que el despliegue solo debe marcarse sano con la base disponible.
 

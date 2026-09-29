@@ -24,8 +24,6 @@ services:
           property: connectionString
       - key: OTP_PEPPER
         generateValue: true
-      - key: PUBLIC_ORIGIN
-        sync: false
       - key: N8N_MAIL_WEBHOOK_URL
         value: https://flagent.app.n8n.cloud/webhook/analease-otp-send
       - key: N8N_MAIL_WEBHOOK_TOKEN

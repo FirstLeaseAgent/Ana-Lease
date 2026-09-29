@@ -21,9 +21,11 @@ COOKIE = 'al_session'
 
 @asynccontextmanager
 async def lifespan(app):
-    for key in ('DATABASE_URL', 'OTP_PEPPER', 'PUBLIC_ORIGIN', 'N8N_MAIL_WEBHOOK_URL', 'N8N_MAIL_WEBHOOK_TOKEN'):
+    for key in ('DATABASE_URL', 'OTP_PEPPER', 'N8N_MAIL_WEBHOOK_URL', 'N8N_MAIL_WEBHOOK_TOKEN'):
         if not os.environ.get(key):
             raise RuntimeError(f'Falta configuración: {key}')
+    if not (os.environ.get('PUBLIC_ORIGIN') or os.environ.get('RENDER_EXTERNAL_URL')):
+        raise RuntimeError('Falta configuración: PUBLIC_ORIGIN o RENDER_EXTERNAL_URL')
     pool.open()
     yield
     pool.close()
@@ -34,7 +36,7 @@ app = FastAPI(title='AnaLease captura', docs_url=None, redoc_url=None, lifespan=
 async def security(request: Request, call_next):
     if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
         origin = request.headers.get('origin')
-        if origin != os.environ.get('PUBLIC_ORIGIN'):
+        if origin != (os.environ.get('PUBLIC_ORIGIN') or os.environ.get('RENDER_EXTERNAL_URL')):
             return Response(status_code=403)
     response = await call_next(request)
     response.headers['Cache-Control'] = 'no-store'
