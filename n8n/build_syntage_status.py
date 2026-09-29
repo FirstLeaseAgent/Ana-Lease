@@ -36,7 +36,7 @@ def http(name, x, y, url, query=None):
         parameters["sendQuery"] = True
         parameters["queryParameters"] = {"parameters": query}
     return node(name, "httpRequest", 4.2, x, y, parameters,
-                onError="continueRegularOutput")
+                onError="continueRegularOutput", alwaysOutputData=True)
 
 
 def respond(name, x, y, status):
@@ -85,6 +85,10 @@ function unpack(items, kind, limit) {
   if (rows.length === 1 && Array.isArray(rows[0]?.['hydra:member'])) {
     return {members:rows[0]['hydra:member'],
             partial:!!rows[0]['hydra:view']?.['hydra:next']};
+  }
+  // With Always Output Data, an empty Syntage result becomes one empty item.
+  if (rows.length === 1 && rows[0] && Object.keys(rows[0]).length === 0) {
+    return {members:[], partial:false};
   }
   // Some n8n HTTP Request configurations emit one item per record.
   if (rows.length && rows.every(x => kind === 'entity'
@@ -139,6 +143,9 @@ let authorizations, partial;
 if (rows.length === 1 && Array.isArray(rows[0]?.['hydra:member'])) {
   authorizations = rows[0]['hydra:member'];
   partial = !!rows[0]['hydra:view']?.['hydra:next'];
+} else if (rows.length === 1 && rows[0] && Object.keys(rows[0]).length === 0) {
+  authorizations = [];
+  partial = false;
 } else if (rows.length && rows.every(x => typeof x?.rfc === 'string' &&
                           (typeof x?.valid === 'boolean' || typeof x?.isValid === 'boolean'))) {
   authorizations = rows;
