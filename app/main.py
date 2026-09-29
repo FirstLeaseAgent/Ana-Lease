@@ -5,7 +5,7 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
@@ -18,7 +18,8 @@ from .rules import FIELDS, allowed_field, masked_name, normalized_rfc, participa
 from .mail import send_code
 from .syntage import SyntageUnavailable, check_status
 from .conversation import (ConversationUnavailable, InvalidProposal, active_person,
-                           apply_proposal, call_agent, context_for, reply_after_proposal, resume_reply)
+                           apply_proposal, call_agent, context_for_turn, align_direct_answer,
+                           reply_after_proposal, resume_reply)
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ class AnswerInput(BaseModel):
 class ConversationInput(BaseModel):
     request_id: UUID
     message: str = Field(min_length=1, max_length=2000)
+    question: str | None = Field(default=None, max_length=2000)
 
 def conversation_enabled_for(conn, user_id):
     enabled = os.environ.get('CAPTURE_AI_ENABLED', '').lower() == 'true'
@@ -330,8 +332,12 @@ def converse(intake_id: UUID, body: ConversationInput, request: Request):
             history_rows = conn.execute("SELECT user_message,response_json FROM capture_turns WHERE intake_id=%s AND status='complete' ORDER BY created_at DESC LIMIT 4", (intake_id,)).fetchall()
             history = [{'user': r['user_message'], 'assistant': r['response_json']['reply']} for r in reversed(history_rows)]
     try:
-        proposal = call_agent(message, context_for(people, preferred), history)
+        context, history = context_for_turn(people, preferred, history, body.question)
+        proposal = call_agent(message, context, history)
+        proposal, alignment = align_direct_answer(proposal, people, message, preferred, context['current_question']['text'])
         updated, audit, active = apply_proposal(people, proposal, message, preferred)
+        if alignment:
+            audit.append(alignment)
         links = []
         for pid, person in updated.items():
             if person['role'] == 'aval' and person.get('rfc') and person.get('rfc') != people.get(pid, {}).get('rfc'):
@@ -367,3 +373,30 @@ def converse(intake_id: UUID, body: ConversationInput, request: Request):
             raise HTTPException(422, str(exc))
         logger.warning('Capture conversation failed: %s', exc)
         raise HTTPException(503, 'No pudimos procesar el mensaje; tu avance está guardado. Intenta otra vez')
+
+@app.post('/intakes/{intake_id}/conversation/undo-last')
+def undo_last_answer(intake_id: UUID, request: Request):
+    user_id = owner(request)
+    with pool.connection() as conn:
+        with conn.transaction():
+            intake_for_owner(conn, intake_id, user_id, editable=True)
+            if not conversation_enabled_for(conn, user_id):
+                raise HTTPException(404, 'Conversación no disponible')
+            turn = conn.execute("SELECT * FROM capture_turns WHERE intake_id=%s AND status='complete' ORDER BY created_at DESC LIMIT 1", (intake_id,)).fetchone()
+            actions = turn['audit_json'] if turn else []
+            changes = [a for a in actions if a.get('type') != 'align_direct_answer']
+            if len(changes) != 1 or changes[0].get('type') != 'save_field' or changes[0].get('field') == 'rfc':
+                raise HTTPException(409, 'Solo puedes deshacer la última respuesta guardada en un campo')
+            change = changes[0]
+            answer = conn.execute('SELECT updated_at FROM answers WHERE intake_id=%s AND participant_id=%s AND field_code=%s FOR UPDATE', (intake_id,change['target_id'],change['field'])).fetchone()
+            # Never remove a pre-existing answer that a model merely repeated.
+            if not answer or answer['updated_at'] != turn['updated_at']:
+                raise HTTPException(409, 'Ese dato ya existía o cambió después; no se deshizo')
+            conn.execute('DELETE FROM answers WHERE intake_id=%s AND participant_id=%s AND field_code=%s', (intake_id,change['target_id'],change['field']))
+            people = conversation_people(conn, intake_id)
+            active = active_person(people, change['target_id'])
+            response = {'reply': resume_reply(people,active), 'active_id': active, 'authorization_links': []}
+            conn.execute('UPDATE intakes SET capture_version=capture_version+1,capture_active_id=%s,updated_at=now() WHERE id=%s', (active,intake_id))
+            reversal = {'type':'undo_save_field','target_id':change['target_id'],'field':change['field'],'request_id':str(turn['request_id'])}
+            conn.execute("INSERT INTO capture_turns(intake_id,request_id,user_message,status,response_json,audit_json) VALUES(%s,%s,%s,'complete',%s,%s)", (intake_id,uuid4(),'Deshacer última respuesta',psycopg.types.json.Jsonb(response),psycopg.types.json.Jsonb([reversal])))
+    return response

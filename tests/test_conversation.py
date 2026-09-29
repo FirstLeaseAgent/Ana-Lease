@@ -42,6 +42,58 @@ class ConversationTest(unittest.TestCase):
         proposal={'reply':'¿A cuál representante te refieres?', 'actions':[]}
         self.assertEqual(c.reply_after_proposal(proposal,self.people,[]),proposal['reply'])
 
+    def test_resume_question_overrides_old_web_question_in_model_context(self):
+        people={'applicant':person('applicant','solicitante','PM',razon_social='Empresa de prueba')}
+        shown=c.resume_reply(people,'applicant')
+        context,history=c.context_for_turn(people,'applicant',[{'user':'Antes','assistant':'¿Cuál es su página web?'}],shown)
+        self.assertEqual(context['current_question']['field'],'nombre_comercial')
+        self.assertEqual(history[-1]['assistant'],shown)
+        self.assertLessEqual(len(history),4)
+        with self.assertRaises(c.InvalidProposal):
+            c.context_for_turn(people,'applicant',[],'Pregunta inventada')
+
+    def test_bare_trade_name_cannot_be_saved_as_webpage(self):
+        people={'applicant':person('applicant','solicitante','PM',razon_social='Empresa de prueba')}
+        proposal={'reply':'Continuamos','actions':[action('save_field','applicant','pagina_web','Patito',evidence='Patito')]}
+        aligned,alignment=c.align_direct_answer(proposal,people,'Patito','applicant',c.resume_reply(people,'applicant'))
+        updated,_,_=c.apply_proposal(people,aligned,'Patito','applicant')
+        self.assertEqual(updated['applicant']['answers']['nombre_comercial'],'Patito')
+        self.assertNotIn('pagina_web',updated['applicant']['answers'])
+        self.assertEqual(alignment['proposed_field'],'pagina_web')
+        self.assertEqual(proposal['actions'][0]['field'],'pagina_web')
+
+    def test_explicit_field_and_clarification_are_not_remapped(self):
+        people={'applicant':person('applicant','solicitante','PM',razon_social='Empresa de prueba')}
+        proposal={'reply':'Continuamos','actions':[action('save_field','applicant','pagina_web','example.test',evidence='Mi página web es example.test')]}
+        aligned,alignment=c.align_direct_answer(proposal,people,'Mi página web es example.test','applicant',c.resume_reply(people,'applicant'))
+        self.assertIs(aligned,proposal)
+        self.assertIsNone(alignment)
+
+    def test_undo_only_removes_a_field_written_by_the_last_turn(self):
+        class Conn:
+            def __init__(self,answer_time):self.answer_time=answer_time;self.query='';self.calls=[]
+            def execute(self,query,params=()):self.query=query;self.calls.append((query,params));return self
+            def fetchone(self):
+                if 'FROM capture_turns' in self.query:
+                    return {'request_id':'00000000-0000-4000-8000-000000000003','audit_json':[{'type':'save_field','target_id':'applicant','field':'pagina_web'}],'updated_at':2}
+                return {'updated_at':self.answer_time}
+            def transaction(self):return nullcontext()
+        intake=UUID('00000000-0000-4000-8000-000000000001')
+        people={'applicant':person('applicant','solicitante','PM',razon_social='Empresa de prueba')}
+        for answer_time in (1,2):
+            conn=Conn(answer_time)
+            with patch.object(main,'owner',return_value='owner'),patch.object(main,'intake_for_owner',return_value={}), \
+                 patch.object(main,'conversation_enabled_for',return_value=True),patch.object(main,'conversation_people',return_value=people), \
+                 patch.object(main.pool,'connection',return_value=nullcontext(conn)):
+                if answer_time==1:
+                    with self.assertRaises(main.HTTPException):main.undo_last_answer(intake,None)
+                    self.assertFalse(any(q.startswith('DELETE') for q,_ in conn.calls))
+                else:
+                    out=main.undo_last_answer(intake,None)
+                    self.assertIn('nombre comercial',out['reply'])
+                    deletions=[params for q,params in conn.calls if q.startswith('DELETE')]
+                    self.assertEqual(deletions,[(intake,'applicant','pagina_web')])
+
     def test_same_contact_copies_only_common_fields_and_asks_for_missing_rfc(self):
         original = copy.deepcopy(self.people)
         proposal = {'reply':'Continuamos con el representante. ¿Cuál es su RFC?', 'actions':[

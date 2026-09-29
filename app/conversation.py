@@ -3,6 +3,7 @@ import copy
 import http.client
 import json
 import os
+import re
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -60,6 +61,51 @@ def context_for(people, preferred=None):
          'known_fields': sorted(list(p['answers']) + (['rfc'] if p.get('rfc') else [])),
          'missing_fields': missing(p)} for pid, p in people.items()
     ]}
+
+
+def context_for_turn(people, preferred, history, shown_question=None):
+    canonical = resume_reply(people, preferred)
+    question = shown_question or canonical
+    last_reply = history[-1].get('assistant') if history else None
+    if question not in (canonical, last_reply):
+        raise InvalidProposal('La pregunta cambió; recarga para continuar')
+    context = context_for(people, preferred)
+    active = context['active_participant_id']
+    field = missing(people[active])[0] if active and question == canonical else None
+    context['current_question'] = {'text': question, 'participant_id': active, 'field': field}
+    # Resuming a request shows a server question, not necessarily the last old turn.
+    recent = list(history[-3:])
+    if not recent or recent[-1].get('assistant') != question:
+        recent.append({'user': '', 'assistant': question})
+    return context, recent
+
+
+def align_direct_answer(proposal, people, message, preferred, question):
+    """Tie a scalar answer to the verified question the browser actually showed.
+
+    Explicit field instructions and multi-field proposals remain model decisions.
+    """
+    if question != resume_reply(people, preferred) or not isinstance(proposal, dict):
+        return proposal, None
+    active = active_person(people, preferred)
+    actions = proposal.get('actions')
+    if not active or not isinstance(actions, list) or len(actions) != 1:
+        return proposal, None
+    action = actions[0]
+    if not isinstance(action, dict) or action.get('type') != 'save_field' or action.get('source_id') is not None:
+        return proposal, None
+    if not isinstance(action.get('value'), str) or action['value'].strip() != message.strip():
+        return proposal, None
+    if re.search(r'\b(rfc|correo|email|tel[eé]fono|p[aá]gina|web|nombre|raz[oó]n|comercial|actividad|cargo|ocupaci[oó]n|aval|representante|contacto|mismo|corrige|cambia)\b', message, re.I):
+        return proposal, None
+    expected = missing(people[active])[0]
+    if action.get('target_id') == active and action.get('field') == expected:
+        return proposal, None
+    aligned = copy.deepcopy(proposal)
+    aligned['actions'][0]['target_id'] = active
+    aligned['actions'][0]['field'] = expected
+    return aligned, {'type': 'align_direct_answer', 'target_id': active,
+                     'proposed_field': action.get('field'), 'field': expected}
 
 
 def resume_reply(people, preferred=None):
