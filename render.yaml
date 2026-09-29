@@ -1,0 +1,32 @@
+# NEW AnaLease resources only. Review names, plan and spend before Blueprint sync.
+databases:
+  - name: analease-captura-db
+    databaseName: analease_captura
+    user: analease_app
+    plan: 0.1c-256mb
+    region: oregon
+
+services:
+  - type: web
+    name: analease-captura-web
+    runtime: python
+    plan: starter
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    preDeployCommand: python -m app.migrate
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeployTrigger: off
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: analease-captura-db
+          property: connectionString
+      - key: OTP_PEPPER
+        generateValue: true
+      - key: PUBLIC_ORIGIN
+        sync: false
+      - key: N8N_MAIL_WEBHOOK_URL
+        value: https://flagent.app.n8n.cloud/webhook/analease-otp-send
+      - key: N8N_MAIL_WEBHOOK_TOKEN
+        sync: false

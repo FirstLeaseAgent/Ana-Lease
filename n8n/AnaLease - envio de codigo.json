@@ -1,0 +1,60 @@
+{
+  "name": "AnaLease - Enviar código por correo",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "analease-otp-send",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "6db8c060-bb95-4a1b-8cea-205c6c08e9b0",
+      "name": "Webhook AnaLease",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "toRecipients": "={{ $json.body.email }}",
+        "subject": "Tu código para AnaLease",
+        "bodyContent": "={{ 'Tu código para continuar en AnaLease es ' + $json.body.code + '. Caduca en 10 minutos.' }}",
+        "additionalFields": {
+          "bodyContentType": "Text",
+          "saveToSentItems": false
+        }
+      },
+      "id": "b9fe7be5-c902-4202-b1e7-36263dca5d36",
+      "name": "Enviar con Outlook",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"ok\":true}",
+        "options": {"responseCode": 200}
+      },
+      "id": "355f43b2-adca-48bd-9e12-7316bde0b8fa",
+      "name": "Confirmar envío",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [720, 300]
+    }
+  ],
+  "connections": {
+    "Webhook AnaLease": {"main": [[{"node": "Enviar con Outlook", "type": "main", "index": 0}]]},
+    "Enviar con Outlook": {"main": [[{"node": "Confirmar envío", "type": "main", "index": 0}]]}
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false
+  },
+  "active": false
+}
