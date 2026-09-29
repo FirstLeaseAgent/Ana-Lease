@@ -39,9 +39,10 @@ Los planes propuestos cuestan aproximadamente **USD 13/mes** por servicio web y 
 
 ## Próximas etapas
 
-1. Captura y almacenamiento privado de documentos; validación de formato y análisis de archivos.
-2. Reglas de requisitos completas a partir de las tablas actuales de campos y documentos, con bucles por RFC y estados de revisión. El conjunto de campos de esta entrega es deliberadamente pequeño.
-3. Integraciones de Syntage y SharePoint desde el servidor, sin datos internos en respuestas públicas.
-4. Conciliación interna entre capturas de distintos correos, expediente y revisión humana. Expiración de capturas inconclusas.
+1. Consultar Syntage por cada RFC de solicitante y aval, sin consultar al SAT para verificar existencia del RFC. La presencia de una entidad en Syntage no implica que tenga autorización: revisar por separado las credenciales SAT filtradas por RFC y su estado (`valid`, `pending`, `waiting`, `invalid`, `disabled`, `error`) y la autorización de Buró que corresponda. Los filtros de Syntage pueden devolver coincidencias parciales: comprobar la igualdad exacta del RFC antes de decidir. No exponer la existencia de una entidad ni datos obtenidos de Syntage en el portal público.
+2. Si hace falta consentimiento o una credencial utilizable, ofrecer el flujo de onboarding de Syntage configurado para la organización. No asumir que `POST /entities` siempre devuelve `onboardingUrl` cuando se proporciona RFC; determinar y probar la liga real de onboarding de SAT y, por separado, la de Buró. No recoger contraseñas CIEC ni material de e.firma en AnaLease.
+3. Captura y almacenamiento privado de documentos; validación de formato y análisis de archivos.
+4. Reglas de requisitos completas a partir de las tablas actuales de campos y documentos, con bucles por RFC y estados de revisión. El conjunto de campos de esta entrega es deliberadamente pequeño.
+5. Integración posterior con SharePoint y conciliación interna entre capturas de distintos correos, expediente y revisión humana. Expiración de capturas inconclusas.
 
 El código se conserva en una rama nueva de `FirstLeaseAgent/Ana-Lease`, sin reemplazar la página HTML de prueba de `main`. El repositorio actualmente es público; no se deben agregar datos de clientes ni secretos. El despliegue solo se hará conectando la rama nueva con recursos nuevos en Render.
