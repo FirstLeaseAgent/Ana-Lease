@@ -22,6 +22,12 @@ def normalized_rfc(value: str) -> tuple[str, str]:
         raise ValueError('RFC inválido')
     return value, 'PF' if len(value) == 13 else 'PM'
 
+def participant_from_rfc(role: str, value: str) -> tuple[str, str]:
+    rfc, subject = normalized_rfc(value)
+    if role == 'representante' and subject != 'PF':
+        raise ValueError('El RFC del representante debe corresponder a una persona física')
+    return rfc, subject
+
 def allowed_field(role: str, subject_type: str, field: str) -> bool:
     return field in FIELDS.get(role, {}).get(subject_type, set())
 

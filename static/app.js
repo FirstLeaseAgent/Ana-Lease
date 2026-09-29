@@ -31,8 +31,7 @@ form.addEventListener('submit',async e=>{e.preventDefault();const value=field.va
     else if(state.step==='code'){await api('/auth/verify','POST',{email:state.email,code:value});field.inputMode='text';await showOwnIntakes();}
     else if(state.step==='rfc'){const result=await api('/intakes','POST',{rfc:value});bubble('Gracias. Vamos a completar los datos de esta solicitud.');await loadIntake(result.id);}
     else if(state.step==='answer'){await api(`/intakes/${state.intake}/participants/${state.participant.id}/answers`,'PUT',{field_code:state.questions[state.index],value});state.index++;if(state.index>=state.questions.length)await loadIntake(state.intake);else nextQuestion();}
-    else if(state.step==='more'){const role=value.toLowerCase();if(!['aval','representante'].includes(role)){ask('Tu avance está guardado. Para agregar a alguien escribe “aval” o “representante”.');}else{state.newRole=role;state.step='participant_type';ask(role==='aval'?'¿El aval es persona física o moral? Escribe PF o PM.':'El representante será persona física. Escribe PF para continuar.');}}
-    else if(state.step==='participant_type'){const kind=value.toUpperCase();if(!['PF','PM'].includes(kind)||state.newRole==='representante'&&kind!=='PF')throw Error('Escribe PF o PM según corresponda');state.newType=kind;state.step='participant_rfc';ask('¿Cuál es el RFC de esta persona?');}
-    else if(state.step==='participant_rfc'){await api('/intakes/'+state.intake+'/participants','POST',{role:state.newRole,subject_type:state.newType,rfc:value});await loadIntake(state.intake);}
+    else if(state.step==='more'){const role=value.toLowerCase();if(!['aval','representante'].includes(role)){ask('Tu avance está guardado. Para agregar a alguien escribe “aval” o “representante”.');}else{state.newRole=role;state.step='participant_rfc';ask(role==='aval'?'¿Cuál es el RFC del aval?':'¿Cuál es el RFC del representante?');}}
+    else if(state.step==='participant_rfc'){await api('/intakes/'+state.intake+'/participants','POST',{role:state.newRole,rfc:value});await loadIntake(state.intake);}
   }catch(err){status(err.message);field.value=value;}finally{button.disabled=false;}
 });
