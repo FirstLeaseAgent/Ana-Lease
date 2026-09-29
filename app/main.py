@@ -15,6 +15,7 @@ from psycopg_pool import ConnectionPool
 
 from .rules import FIELDS, allowed_field, masked_name, normalized_rfc, participant_from_rfc
 from .mail import send_code
+from .syntage import SyntageUnavailable, check_status
 
 pool = ConnectionPool(conninfo=os.environ.get('DATABASE_URL', ''), min_size=0, max_size=5, open=False, kwargs={'row_factory': dict_row})
 COOKIE = 'al_session'
@@ -68,6 +69,16 @@ class ParticipantInput(BaseModel):
 class AnswerInput(BaseModel):
     field_code: str = Field(max_length=80)
     value: str = Field(min_length=1, max_length=500)
+
+def authorization_link(rfc: str):
+    try:
+        status = check_status(rfc)
+    except (SyntageUnavailable, KeyError):
+        raise HTTPException(503, 'No pudimos verificar la autorización; intenta más tarde')
+    if status['next_action'] != 'onboarding':
+        return None
+    kind = 'legal' if len(rfc) == 12 else 'physical'
+    return f'https://registro.syntage.com/8de4ef?reporteDeCredito=true&personType={kind}'
 
 def owner(request: Request) -> str:
     token = request.cookies.get(COOKIE)
@@ -179,11 +190,12 @@ def create_intake(body: RfcInput, request: Request):
         rfc, subject = normalized_rfc(body.rfc)
     except ValueError:
         raise HTTPException(422, 'Revisa el formato del RFC')
+    link = authorization_link(rfc)
     with pool.connection() as conn:
         with conn.transaction():
             row = conn.execute('INSERT INTO intakes(owner_id,rfc) VALUES(%s,%s) ON CONFLICT(owner_id,rfc) DO UPDATE SET updated_at=now() RETURNING id,status', (user_id,rfc)).fetchone()
             conn.execute("INSERT INTO participants(intake_id,role,subject_type,rfc) VALUES(%s,'solicitante',%s,%s) ON CONFLICT DO NOTHING", (row['id'],subject,rfc))
-    return {'id': row['id'], 'status': row['status']}
+    return {'id': row['id'], 'status': row['status'], 'authorization_url': link}
 
 @app.get('/intakes/{intake_id}')
 def read_intake(intake_id: UUID, request: Request):
@@ -215,6 +227,7 @@ def add_participant(intake_id: UUID, body: ParticipantInput, request: Request):
         rfc, subject = participant_from_rfc(body.role, body.rfc)
     except ValueError as exc:
         raise HTTPException(422, 'Revisa el formato del RFC' if str(exc) == 'RFC inválido' else str(exc))
+    link = authorization_link(rfc) if body.role == 'aval' else None
     with pool.connection() as conn:
         with conn.transaction():
             intake_for_owner(conn, intake_id, user_id, editable=True)
@@ -223,7 +236,7 @@ def add_participant(intake_id: UUID, body: ParticipantInput, request: Request):
                 if n >= 3:
                     raise HTTPException(409, 'Máximo tres avales')
             row = conn.execute('INSERT INTO participants(intake_id,role,subject_type,rfc) VALUES(%s,%s,%s,%s) RETURNING id', (intake_id,body.role,subject,rfc)).fetchone()
-    return {'id': row['id']}
+    return {'id': row['id'], 'authorization_url': link}
 
 @app.put('/intakes/{intake_id}/participants/{participant_id}/answers')
 def save_answer(intake_id: UUID, participant_id: UUID, body: AnswerInput, request: Request):

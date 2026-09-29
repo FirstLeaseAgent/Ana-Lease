@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from app import syntage
+from app import main
 
 
 class FakeResponse:
@@ -30,6 +31,15 @@ class FakeConnection:
 
 
 class SyntageTest(unittest.TestCase):
+    def test_link_is_shown_only_for_onboarding(self):
+        with patch.object(main, 'check_status', return_value={'next_action': 'onboarding'}):
+            self.assertEqual(main.authorization_link('FLE180212MC1'),
+                'https://registro.syntage.com/8de4ef?reporteDeCredito=true&personType=legal')
+            self.assertEqual(main.authorization_link('RIAM831126SI1'),
+                'https://registro.syntage.com/8de4ef?reporteDeCredito=true&personType=physical')
+        with patch.object(main, 'check_status', return_value={'next_action': 'continue'}):
+            self.assertIsNone(main.authorization_link('FLE180212MC1'))
+
     def test_sends_only_rfc_and_returns_allowed_status(self):
         env = {
             'N8N_SYNTAGE_WEBHOOK_URL': 'https://flagent.app.n8n.cloud/webhook/analease-syntage-status',

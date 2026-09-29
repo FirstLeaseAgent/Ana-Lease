@@ -140,7 +140,7 @@ if (rows.length === 1 && Array.isArray(rows[0]?.['hydra:member'])) {
   authorizations = rows[0]['hydra:member'];
   partial = !!rows[0]['hydra:view']?.['hydra:next'];
 } else if (rows.length && rows.every(x => typeof x?.rfc === 'string' &&
-                                                typeof x?.isValid === 'boolean')) {
+                          (typeof x?.valid === 'boolean' || typeof x?.isValid === 'boolean'))) {
   authorizations = rows;
   partial = rows.length >= 1000;
 } else {
@@ -149,7 +149,7 @@ if (rows.length === 1 && Array.isArray(rows[0]?.['hydra:member'])) {
 const now = Date.now();
 const authorized = authorizations.some(a =>
   String(a?.rfc || '').toUpperCase() === base.rfc &&
-  a.isValid === true && !a.deletedAt &&
+  (a.valid === true || a.isValid === true) && !a.deletedAt &&
   Number.isFinite(Date.parse(a.authorizedUntil)) && Date.parse(a.authorizedUntil) > now
 );
 if (!authorized && partial) {
