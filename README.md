@@ -33,6 +33,8 @@ Si la credencial existente es del nodo SMTP «Send Email» con usuario y contras
 
 `render.yaml` propone exclusivamente `analease-captura-web` y `analease-captura-db` en Oregon. Se debe revisar el costo de ambos planes, el nombre del dominio y el flujo n8n nuevo antes de sincronizar. En Render el origen se obtiene automáticamente de `RENDER_EXTERNAL_URL`; no se debe configurar `PUBLIC_ORIGIN` salvo que se use un dominio propio. Se desactivó el despliegue automático del servicio. **Nunca sincronizar este Blueprint con un recurso existente ni apuntar `DATABASE_URL` a `cartera-historica-db`.**
 
+`.python-version` fija Python 3.13.5 porque la versión de `psycopg[binary,pool]` de esta entrega no tiene distribución binaria para la versión 3.14 elegida por defecto en servicios nuevos de Render.
+
 Los planes propuestos cuestan aproximadamente **USD 13/mes** por servicio web y base (USD 7 + USD 6), sin contar almacenamiento superior al incluido, transferencia adicional ni otros cargos del workspace. Consultar el [precio vigente de Render](https://render.com/pricing) antes de aplicar. La app comprueba conexión a la base en `/health`, por lo que el despliegue solo debe marcarse sano con la base disponible.
 
 ## Próximas etapas
