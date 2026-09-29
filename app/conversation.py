@@ -1,0 +1,212 @@
+"""Validated conversational proposals. No model can select a different intake."""
+import copy
+import http.client
+import json
+import os
+from urllib.parse import urlsplit
+from uuid import uuid4
+
+from .rules import FIELDS, masked_name, normalized_rfc
+
+MAX_ACTIONS = 16
+COMMON_FIELDS = {'nombre', 'correo_contacto', 'telefono', 'rfc'}
+ORDER = {
+    'solicitante': ['razon_social', 'nombre', 'nombre_comercial', 'actividad', 'pagina_web', 'correo_contacto', 'telefono'],
+    'contacto': ['nombre', 'correo_contacto', 'telefono'],
+    'aval': ['rfc', 'razon_social', 'nombre', 'ocupacion', 'pagina_web', 'correo_contacto', 'telefono'],
+    'representante': ['rfc', 'nombre', 'cargo', 'correo_contacto', 'telefono'],
+}
+QUESTIONS = {
+    'rfc': '¿Cuál es su RFC?', 'nombre': '¿Cuál es su nombre completo?',
+    'razon_social': '¿Cuál es la razón social?', 'nombre_comercial': '¿Cuál es el nombre comercial?',
+    'actividad': '¿A qué se dedica?', 'pagina_web': '¿Cuál es su página web?',
+    'correo_contacto': '¿Cuál es el correo de contacto?', 'telefono': '¿Cuál es el teléfono?',
+    'ocupacion': '¿Cuál es su ocupación?', 'cargo': '¿Cuál es su cargo?',
+}
+
+
+class ConversationUnavailable(Exception):
+    """Only fixed, non-sensitive failure categories may appear in this exception."""
+
+
+class InvalidProposal(ValueError):
+    pass
+
+
+def missing(person):
+    fields = set(FIELDS[person['role']][person['subject_type']])
+    if person['role'] in ('aval', 'representante') and not person.get('rfc'):
+        fields.add('rfc')
+    return [f for f in ORDER[person['role']] if f in fields and not (
+        person.get('rfc') if f == 'rfc' else person['answers'].get(f))]
+
+
+def active_person(people, preferred=None):
+    if preferred in people and missing(people[preferred]):
+        return preferred
+    return next((pid for pid, p in people.items() if missing(p)), None)
+
+
+def person_hint(person):
+    name = person['answers'].get('nombre') or person['answers'].get('razon_social')
+    label = f"{person['role'].capitalize()} ({person['subject_type']})"
+    return label + (' · ' + masked_name(name) if isinstance(name, str) else '')
+
+
+def context_for(people, preferred=None):
+    active = active_person(people, preferred)
+    return {'version': 1, 'active_participant_id': active, 'participants': [
+        {'id': pid, 'role': p['role'], 'subject_type': p['subject_type'], 'hint': person_hint(p),
+         'known_fields': sorted(list(p['answers']) + (['rfc'] if p.get('rfc') else [])),
+         'missing_fields': missing(p)} for pid, p in people.items()
+    ]}
+
+
+def resume_reply(people, preferred=None):
+    active = active_person(people, preferred)
+    if not active:
+        return 'Este avance está guardado. Puedes agregar un aval o representante, o regresar después.'
+    person = people[active]
+    return f'Estamos completando la información de {person_hint(person)}. {QUESTIONS[missing(person)[0]]}'
+
+
+def redact_reply(reply, people):
+    # Browser receives context hints, not a replay of previously stored answers.
+    for person in people.values():
+        values = list(person['answers'].values()) + [person.get('rfc')]
+        for value in values:
+            if isinstance(value, str) and len(value) >= 4 and value in reply:
+                hint = masked_name(value) if ' ' in value else '••••'
+                reply = reply.replace(value, hint)
+    return reply
+
+
+def apply_proposal(people, proposal, message, preferred=None):
+    """Return a full validated snapshot and audit trail; caller commits atomically."""
+    if not isinstance(proposal, dict) or set(proposal) != {'reply', 'actions'}:
+        raise InvalidProposal('Respuesta de IA no reconocida')
+    if not isinstance(proposal['reply'], str) or not 1 <= len(proposal['reply']) <= 1800:
+        raise InvalidProposal('Respuesta de IA no reconocida')
+    actions = proposal['actions']
+    if not isinstance(actions, list) or len(actions) > MAX_ACTIONS:
+        raise InvalidProposal('Demasiados cambios propuestos')
+    result = copy.deepcopy(people)
+    audit = []
+    new_id = None
+    preferred_id = preferred
+    for action in actions:
+        if not isinstance(action, dict) or set(action) != {'type', 'target_id', 'source_id', 'role', 'field', 'value', 'evidence'}:
+            raise InvalidProposal('Acción no reconocida')
+        if not isinstance(action['target_id'], str) or any(
+            action[k] is not None and not isinstance(action[k], str)
+            for k in ('source_id', 'role', 'field', 'value')
+        ):
+            raise InvalidProposal('Acción no reconocida')
+        evidence = action['evidence']
+        if not isinstance(evidence, str) or not evidence.strip() or evidence.casefold() not in message.casefold():
+            raise InvalidProposal('El cambio no está respaldado por tu mensaje')
+        kind = action['type']
+        if kind == 'focus_participant':
+            if action['target_id'] not in people or any(action[k] is not None for k in ('source_id','role','field','value')):
+                raise InvalidProposal('El participante no pertenece a esta solicitud')
+            preferred_id = action['target_id']
+            audit.append({'type': kind, 'target_id': preferred_id, 'evidence': evidence})
+            continue
+        if kind == 'add_participant':
+            role = action['role']
+            if role not in ('aval', 'representante') or role not in message.casefold() or new_id:
+                raise InvalidProposal('Revisa qué participante deseas agregar')
+            if action['target_id'] != 'new' or any(action[k] is not None for k in ('source_id', 'field', 'value')):
+                raise InvalidProposal('Acción no reconocida')
+            if role == 'aval' and sum(p['role'] == 'aval' for p in result.values()) >= 3:
+                raise InvalidProposal('Máximo tres avales')
+            new_id = str(uuid4())
+            result[new_id] = {'id': new_id, 'role': role, 'subject_type': 'PF', 'rfc': None, 'answers': {}}
+            audit.append({'type': kind, 'target_id': new_id, 'role': role, 'evidence': evidence})
+            preferred_id = new_id
+            continue
+        if kind not in ('save_field', 'reuse_field') or action['role'] is not None:
+            raise InvalidProposal('Acción no reconocida')
+        target_id = new_id if action['target_id'] == 'new' else action['target_id']
+        if target_id not in result:
+            raise InvalidProposal('El participante no pertenece a esta solicitud')
+        target = result[target_id]
+        field = action['field']
+        if kind == 'reuse_field':
+            source_id = action['source_id']
+            if source_id not in people or field not in COMMON_FIELDS or action['value'] is not None:
+                raise InvalidProposal('El origen no pertenece a esta solicitud o el campo no se puede reutilizar')
+            source = result[source_id]
+            # Company contact fields are not a distinct physical contact identity.
+            if field != 'rfc' and source['subject_type'] != 'PF':
+                raise InvalidProposal('Los datos de una empresa no identifican a la persona de contacto')
+            value = source.get('rfc') if field == 'rfc' else source['answers'].get(field)
+            if not value:
+                raise InvalidProposal('Ese dato todavía no está capturado')
+        else:
+            if action['source_id'] is not None:
+                raise InvalidProposal('Acción no reconocida')
+            value = action['value']
+            if not isinstance(value, str) or not 1 <= len(value.strip()) <= 500 or value.strip().casefold() not in evidence.casefold():
+                raise InvalidProposal('El dato no aparece en tu mensaje')
+            value = value.strip()
+            source_id = None
+        if field == 'rfc':
+            if target['role'] not in ('aval', 'representante'):
+                raise InvalidProposal('El RFC de este participante no se puede cambiar aquí')
+            try:
+                value, subject = normalized_rfc(value)
+            except ValueError:
+                raise InvalidProposal('Revisa el formato del RFC')
+            if target['role'] == 'representante' and subject != 'PF':
+                raise InvalidProposal('El RFC del representante debe corresponder a persona física')
+            if any(f not in FIELDS[target['role']][subject] for f in target['answers']):
+                raise InvalidProposal('El RFC no corresponde al tipo de datos de este participante')
+            existing = target.get('rfc')
+            target['subject_type'] = subject
+        else:
+            if field not in FIELDS[target['role']][target['subject_type']]:
+                raise InvalidProposal('El campo no corresponde a ese participante')
+            existing = target['answers'].get(field)
+        if existing and existing != value:
+            raise InvalidProposal('Ese campo ya tiene otro valor; confirma la corrección con nuestro equipo')
+        # Equal values are idempotent; a repeated reference must not duplicate data.
+        if field == 'rfc':
+            target['rfc'] = value
+        else:
+            target['answers'][field] = value
+        audit.append({'type': kind, 'target_id': target_id, 'source_id': source_id,
+                      'field': field, 'evidence': evidence})
+        preferred_id = target_id
+    if new_id and result[new_id].get('rfc') and any(
+        p['role'] == result[new_id]['role'] and p.get('rfc') == result[new_id]['rfc']
+        for pid, p in result.items() if pid != new_id
+    ):
+        raise InvalidProposal('Ese participante ya está capturado; utiliza sus datos existentes')
+    return result, audit, active_person(result, preferred_id)
+
+
+def call_agent(message, context, history):
+    parts = urlsplit(os.environ.get('N8N_CONVERSATION_WEBHOOK_URL', ''))
+    token = os.environ.get('N8N_CONVERSATION_WEBHOOK_TOKEN', '')
+    if (parts.scheme != 'https' or parts.netloc != 'flagent.app.n8n.cloud'
+            or parts.path != '/webhook/analease-conversation' or parts.query or parts.fragment or not token):
+        raise ConversationUnavailable('configuration')
+    payload = json.dumps({'version': 1, 'message': message, 'context': context, 'history': history}).encode()
+    conn = http.client.HTTPSConnection(parts.hostname, timeout=45)
+    try:
+        conn.request('POST', parts.path, body=payload, headers={'Content-Type': 'application/json', 'X-AnaLease-Token': token})
+        response = conn.getresponse()
+        if response.status != 200:
+            raise ConversationUnavailable(f'http_{response.status}')
+        raw = response.read(32769)
+        if len(raw) > 32768:
+            raise ConversationUnavailable('oversized')
+        data = json.loads(raw)
+    except (OSError, ValueError, http.client.HTTPException):
+        raise ConversationUnavailable('transport_or_json')
+    finally:
+        conn.close()
+    if not isinstance(data, dict) or data.get('ok') is not True or data.get('version') != 1:
+        raise ConversationUnavailable('inconclusive')
+    return data.get('proposal')
