@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -16,6 +17,8 @@ from psycopg_pool import ConnectionPool
 from .rules import FIELDS, allowed_field, masked_name, normalized_rfc, participant_from_rfc
 from .mail import send_code
 from .syntage import SyntageUnavailable, check_status
+
+logger = logging.getLogger(__name__)
 
 pool = ConnectionPool(conninfo=os.environ.get('DATABASE_URL', ''), min_size=0, max_size=5, open=False, kwargs={'row_factory': dict_row})
 COOKIE = 'al_session'
@@ -73,7 +76,12 @@ class AnswerInput(BaseModel):
 def authorization_link(rfc: str):
     try:
         status = check_status(rfc)
-    except (SyntageUnavailable, KeyError):
+    except SyntageUnavailable as exc:
+        # Log only the failure class, never the RFC, webhook response or token.
+        logger.warning('Syntage status check failed: %s', exc)
+        raise HTTPException(503, 'No pudimos verificar la autorización; intenta más tarde')
+    except KeyError:
+        logger.warning('Syntage status check failed: missing server configuration')
         raise HTTPException(503, 'No pudimos verificar la autorización; intenta más tarde')
     if status['next_action'] != 'onboarding':
         return None

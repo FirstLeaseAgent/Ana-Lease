@@ -27,7 +27,7 @@ def check_status(rfc: str) -> dict:
         })
         response = conn.getresponse()
         if response.status != 200:
-            raise SyntageUnavailable('n8n no pudo confirmar el estado')
+            raise SyntageUnavailable(f'n8n_http_{response.status}')
         data = json.loads(response.read(4097))
     except (OSError, ValueError) as exc:
         raise SyntageUnavailable('n8n no está disponible') from exc
