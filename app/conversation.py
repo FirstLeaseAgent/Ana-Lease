@@ -81,6 +81,14 @@ def redact_reply(reply, people):
     return reply
 
 
+def reply_after_proposal(proposal, people, audit, preferred=None):
+    # The model interprets intent; committed fields determine the next question.
+    # Keep free-form clarifications when no capture action was accepted.
+    if audit:
+        return resume_reply(people, preferred)
+    return redact_reply(proposal['reply'], people)
+
+
 def apply_proposal(people, proposal, message, preferred=None):
     """Return a full validated snapshot and audit trail; caller commits atomically."""
     if not isinstance(proposal, dict) or set(proposal) != {'reply', 'actions'}:

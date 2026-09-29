@@ -22,6 +22,26 @@ class ConversationTest(unittest.TestCase):
     def setUp(self):
         self.people = {'contact': person('contact','contacto',nombre='Nombre de prueba',correo_contacto='prueba@example.test',telefono='5551234567')}
 
+    def test_saved_legal_name_cannot_be_asked_again_in_reply(self):
+        people={'applicant':person('applicant','solicitante','PM',razon_social='Empresa de prueba')}
+        proposal={'reply':'¿Cuál es la razón social?', 'actions':[]}
+        reply=c.reply_after_proposal(proposal,people,[{'type':'save_field','field':'razon_social'}],'applicant')
+        self.assertNotIn('¿Cuál es la razón social?',reply)
+        self.assertIn('¿Cuál es el nombre comercial?',reply)
+
+    def test_reused_representative_fields_ask_rfc_before_cargo(self):
+        people={'rep':person('rep','representante',nombre='Nombre de prueba',correo_contacto='prueba@example.test',telefono='5551234567')}
+        proposal={'reply':'Solo falta su ocupación', 'actions':[]}
+        reply=c.reply_after_proposal(proposal,people,[{'type':'reuse_field'}],'rep')
+        self.assertIn('¿Cuál es su RFC?',reply)
+        self.assertNotIn('ocupación',reply)
+        people['rep']['rfc']='ABCD010101AB1'
+        self.assertIn('¿Cuál es su cargo?',c.reply_after_proposal(proposal,people,[{'type':'save_field'}],'rep'))
+
+    def test_no_actions_preserve_model_clarification(self):
+        proposal={'reply':'¿A cuál representante te refieres?', 'actions':[]}
+        self.assertEqual(c.reply_after_proposal(proposal,self.people,[]),proposal['reply'])
+
     def test_same_contact_copies_only_common_fields_and_asks_for_missing_rfc(self):
         original = copy.deepcopy(self.people)
         proposal = {'reply':'Continuamos con el representante. ¿Cuál es su RFC?', 'actions':[

@@ -29,7 +29,8 @@ async function loadIntake(id){
   nextQuestion();
 }
 ask('Hola. Para continuar, escribe tu correo. Te enviaremos un código de un solo uso.','email');
-form.addEventListener('submit',async e=>{e.preventDefault();const value=field.value.trim();if(!value)return;const button=form.querySelector('button');button.disabled=true;status('');bubble(['code','answer','conversation'].includes(state.step)?'••••••':value,true);
+document.querySelector('#copy-conversation')?.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(convo.innerText);status('Conversación copiada. Puedes revisarla antes de compartirla.');}catch{status('No pudimos copiar. Selecciona el texto de la conversación y cópialo.');}});
+form.addEventListener('submit',async e=>{e.preventDefault();const value=field.value.trim();if(!value)return;const button=form.querySelector('button');button.disabled=true;status('');bubble(state.step==='code'?'••••••':value,true);
   try{
     if(state.step==='email'){state.email=value;await api('/auth/start','POST',{email:value});state.step='code';ask('Escribe el código de seis dígitos que enviamos a tu correo.','text');field.inputMode='numeric';}
     else if(state.step==='code'){await api('/auth/verify','POST',{email:state.email,code:value});field.inputMode='text';await showOwnIntakes();}

@@ -18,7 +18,7 @@ from .rules import FIELDS, allowed_field, masked_name, normalized_rfc, participa
 from .mail import send_code
 from .syntage import SyntageUnavailable, check_status
 from .conversation import (ConversationUnavailable, InvalidProposal, active_person,
-                           apply_proposal, call_agent, context_for, redact_reply, resume_reply)
+                           apply_proposal, call_agent, context_for, reply_after_proposal, resume_reply)
 
 logger = logging.getLogger(__name__)
 
@@ -338,7 +338,7 @@ def converse(intake_id: UUID, body: ConversationInput, request: Request):
                 url = authorization_link(person['rfc'])
                 if url:
                     links.append({'url': url, 'context': person['role'].capitalize()})
-        reply = redact_reply(proposal['reply'], updated)
+        reply = reply_after_proposal(proposal, updated, audit, active)
         response = {'reply': reply, 'active_id': active, 'authorization_links': links}
         with pool.connection() as conn:
             with conn.transaction():
