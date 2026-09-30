@@ -157,9 +157,23 @@ def align_direct_answer(proposal, people, message, preferred, question):
 def resume_reply(people, preferred=None):
     active = active_person(people, preferred)
     if not active:
+        applicant = next((p for p in people.values() if p['role']=='solicitante'),None)
+        if applicant:
+            if applicant['subject_type']=='PM' and not any(p['role']=='representante' for p in people.values()):
+                return 'Los datos están guardados. Para continuar, agrega al representante legal de la empresa. También puedes agregar un aval.'
+            return 'Los datos están guardados. Continuemos con los documentos de esta solicitud.'
         return 'Este avance está guardado. Puedes agregar un aval o representante, o regresar después.'
     person = people[active]
     return f'Estamos completando la información de {person_hint(person)}. {QUESTIONS[missing(person)[0]]}'
+
+
+def capture_stage(people, preferred=None):
+    applicant = next((p for p in people.values() if p['role']=='solicitante'),None)
+    if not applicant or active_person(people,preferred):
+        return 'capture'
+    if applicant['subject_type']=='PM' and not any(p['role']=='representante' for p in people.values()):
+        return 'capture'
+    return 'documents'
 
 
 def redact_reply(reply, people):

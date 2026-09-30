@@ -19,7 +19,8 @@ from .mail import send_code
 from .syntage import SyntageUnavailable, check_status
 from .conversation import (ConversationUnavailable, InvalidProposal, active_person,
                            apply_proposal, call_agent, context_for_turn, align_direct_answer,
-                           reply_after_proposal, resume_reply, history_for_turns)
+                           reply_after_proposal, resume_reply, history_for_turns, capture_stage)
+from .document_routes import install as install_document_routes
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,10 @@ def javascript():
 @app.get('/app.css')
 def stylesheet():
     return Response(Path(__file__).resolve().parent.parent.joinpath('static/app.css').read_text(), media_type='text/css')
+
+@app.get('/documents.js')
+def documents_javascript():
+    return Response(Path(__file__).resolve().parent.parent.joinpath('static/documents.js').read_text(),media_type='application/javascript')
 
 @app.post('/auth/start', status_code=202)
 def auth_start(body: EmailInput, request: Request):
@@ -300,7 +305,7 @@ def resume_conversation(intake_id: UUID, request: Request):
             raise HTTPException(404, 'Conversación no disponible')
         people = conversation_people(conn, intake_id)
         preferred = str(intake['capture_active_id']) if intake['capture_active_id'] else None
-    return {'reply': resume_reply(people, preferred), 'active_id': active_person(people, preferred), 'authorization_links': []}
+    return {'reply': resume_reply(people, preferred), 'active_id': active_person(people, preferred), 'authorization_links': [], 'stage':capture_stage(people,preferred)}
 
 @app.post('/intakes/{intake_id}/conversation')
 def converse(intake_id: UUID, body: ConversationInput, request: Request):
@@ -346,7 +351,7 @@ def converse(intake_id: UUID, body: ConversationInput, request: Request):
                 if url:
                     links.append({'url': url, 'context': person['role'].capitalize()})
         reply = reply_after_proposal(proposal, updated, audit, active)
-        response = {'reply': reply, 'active_id': active, 'authorization_links': links}
+        response = {'reply': reply, 'active_id': active, 'authorization_links': links,'stage':capture_stage(updated,active)}
         with pool.connection() as conn:
             with conn.transaction():
                 current = intake_for_owner(conn, intake_id, user_id, editable=True)
@@ -396,8 +401,10 @@ def undo_last_answer(intake_id: UUID, request: Request):
             conn.execute('DELETE FROM answers WHERE intake_id=%s AND participant_id=%s AND field_code=%s', (intake_id,change['target_id'],change['field']))
             people = conversation_people(conn, intake_id)
             active = active_person(people, change['target_id'])
-            response = {'reply': resume_reply(people,active), 'active_id': active, 'authorization_links': []}
+            response = {'reply': resume_reply(people,active), 'active_id': active, 'authorization_links': [],'stage':capture_stage(people,active)}
             conn.execute('UPDATE intakes SET capture_version=capture_version+1,capture_active_id=%s,updated_at=now() WHERE id=%s', (active,intake_id))
             reversal = {'type':'undo_save_field','target_id':change['target_id'],'field':change['field'],'request_id':str(turn['request_id'])}
             conn.execute("INSERT INTO capture_turns(intake_id,request_id,user_message,status,response_json,audit_json) VALUES(%s,%s,%s,'complete',%s,%s)", (intake_id,uuid4(),'Deshacer última respuesta',psycopg.types.json.Jsonb(response),psycopg.types.json.Jsonb([reversal])))
     return response
+
+install_document_routes(app,pool,owner,intake_for_owner,conversation_people,conversation_enabled_for)

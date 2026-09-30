@@ -8,9 +8,11 @@
   <main>
     <header><div class="brand">Ana<span>Lease</span></div><p>Tu solicitud, paso a paso</p><button id="copy-conversation" type="button" style="padding:8px 12px;margin-top:8px">Copiar conversación</button><button id="undo-answer" type="button" style="padding:8px 12px;margin:8px 0 0 8px">Deshacer última respuesta</button></header>
     <section id="conversation" aria-live="polite"></section>
+    <section id="documents" hidden aria-label="Documentos de la solicitud"></section>
     <form id="composer"><label id="prompt" for="answer">Tu respuesta</label><div class="line"><input id="answer" autocomplete="off" required><button>Continuar</button></div></form>
     <p id="notice" role="status"></p>
   </main>
   <script src="/app.js" defer></script>
+  <script src="/documents.js" defer></script>
 </body>
 </html>

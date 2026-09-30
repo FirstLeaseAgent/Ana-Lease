@@ -70,3 +70,54 @@ CREATE TABLE IF NOT EXISTS capture_turns (
   PRIMARY KEY (intake_id,request_id)
 );
 CREATE INDEX IF NOT EXISTS capture_turns_created ON capture_turns(created_at);
+
+CREATE TABLE IF NOT EXISTS document_dependencies (
+  intake_id uuid NOT NULL,
+  participant_id uuid NOT NULL,
+  field_code text NOT NULL,
+  value text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(participant_id,field_code),
+  FOREIGN KEY(participant_id,intake_id) REFERENCES participants(id,intake_id)
+);
+CREATE TABLE IF NOT EXISTS document_uploads (
+  id uuid PRIMARY KEY,
+  intake_id uuid NOT NULL REFERENCES intakes(id),
+  participant_id uuid NOT NULL,
+  document_code text NOT NULL,
+  sha256 text NOT NULL,
+  byte_size integer NOT NULL CHECK(byte_size BETWEEN 1 AND 10485760),
+  mime_type text NOT NULL,
+  status text NOT NULL CHECK(status IN ('processing','received','failed')),
+  storage_id text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(id,intake_id),
+  FOREIGN KEY(participant_id,intake_id) REFERENCES participants(id,intake_id)
+);
+CREATE TABLE IF NOT EXISTS document_states (
+  intake_id uuid NOT NULL,
+  participant_id uuid NOT NULL,
+  document_code text NOT NULL,
+  status text NOT NULL CHECK(status IN ('received','deferred')),
+  upload_id uuid,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(participant_id,document_code),
+  FOREIGN KEY(participant_id,intake_id) REFERENCES participants(id,intake_id),
+  FOREIGN KEY(upload_id,intake_id) REFERENCES document_uploads(id,intake_id)
+);
+CREATE TABLE IF NOT EXISTS document_events (
+  id bigserial PRIMARY KEY,
+  intake_id uuid NOT NULL REFERENCES intakes(id),
+  actor_id uuid NOT NULL REFERENCES users(id),
+  participant_id uuid NOT NULL,
+  document_code text,
+  action text NOT NULL,
+  details jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  FOREIGN KEY(participant_id,intake_id) REFERENCES participants(id,intake_id)
+);
+CREATE INDEX IF NOT EXISTS document_dependencies_intake ON document_dependencies(intake_id);
+CREATE INDEX IF NOT EXISTS document_states_intake ON document_states(intake_id);
+CREATE INDEX IF NOT EXISTS document_uploads_intake_created ON document_uploads(intake_id,created_at);
+CREATE INDEX IF NOT EXISTS document_events_intake_created ON document_events(intake_id,created_at);

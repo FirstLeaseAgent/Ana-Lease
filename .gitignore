@@ -5,3 +5,6 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+
+# Private organization catalogue; configured in Render, never committed.
+app/document_catalog.json
