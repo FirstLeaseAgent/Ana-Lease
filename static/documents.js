@@ -1,13 +1,23 @@
 const documentPanel=document.querySelector('#documents');
 const fileAttempts=new Map();
+let documentUploadBusy=false;
+function sendDocument(path,file,onProgress){return new Promise((resolve,reject)=>{
+  const xhr=new XMLHttpRequest();xhr.open('PUT',path);xhr.withCredentials=true;xhr.timeout=75000;
+  xhr.setRequestHeader('Content-Type',file.type||'application/octet-stream');
+  xhr.upload.onprogress=e=>{if(e.lengthComputable)onProgress(Math.round(e.loaded/e.total*100));};
+  xhr.onload=()=>{let out;try{out=JSON.parse(xhr.responseText);}catch{reject(Error('No pudimos confirmar el guardado. Vuelve a intentar con el mismo archivo.'));return;}
+    if(xhr.status<200||xhr.status>=300||out.ok!==true){reject(Error(out.detail||'No pudimos guardar el archivo. Vuelve a intentar.'));return;}resolve(out);};
+  xhr.onerror=xhr.ontimeout=()=>reject(Error('No pudimos confirmar el guardado. Reintenta con el mismo archivo.'));
+  xhr.send(file);
+});}
 function docElement(tag,text){const el=document.createElement(tag);if(text)el.textContent=text;return el;}
-function docButton(text,action){const b=docElement('button',text);b.type='button';b.addEventListener('click',async()=>{b.disabled=true;status('');try{await action();}catch(error){status(error.message);}finally{b.disabled=false;}});return b;}
+function docButton(text,action){const b=docElement('button',text);b.type='button';b.addEventListener('click',async()=>{if(documentUploadBusy)return;b.disabled=true;status('');try{await action();}catch(error){status(error.message);}finally{b.disabled=false;}});return b;}
 async function loadDocuments(){
   const result=await api('/intakes/'+state.intake+'/documents');
   documentPanel.replaceChildren();documentPanel.hidden=false;
   documentPanel.append(docElement('h2','Documentos'),docElement('p',result.message));
   const submitted=result.status==='submitted';
-  if(submitted){state.step='submitted';form.hidden=true;}
+  if(submitted){state.step='submitted';form.hidden=true;documentPanel.className='documents-complete';}else documentPanel.className='';
   if(!submitted&&!result.upload_available)documentPanel.append(docElement('p','La carga de archivos estará disponible en breve. Puedes revisar la lista y dejar pendientes.'));
   const options=docElement('div');options.className='document-actions';
   for(const role of ['aval','representante'])options.append(docButton('Agregar otro '+role,async()=>{const out=await api('/intakes/'+state.intake+'/conversation','POST',{request_id:crypto.randomUUID(),message:'Quiero agregar un '+role,question:state.currentQuestion});showConversation(out);}));
@@ -26,17 +36,34 @@ async function loadDocuments(){
       card.append(docButton('Guardar estado civil',async()=>{if(!input.value.trim())throw Error('Indica el estado civil');await api('/intakes/'+state.intake+'/documents/dependency','POST',{participant_id:item.participant_id,field:item.dependency_field,value:input.value.trim()});await loadDocuments();}));
     }
     if(!submitted&&item.applicable===true){
-      const file=docElement('input');file.type='file';file.accept='.pdf,.jpg,.jpeg,.png';file.setAttribute('aria-label','Seleccionar '+item.label);file.disabled=!result.upload_available;
-      card.append(file);
+      let selectedFile=null;
+      const file=docElement('input');file.type='file';file.accept='.pdf,.jpg,.jpeg,.png';file.hidden=true;file.setAttribute('aria-label','Seleccionar '+item.label);file.disabled=!result.upload_available;
+      const drop=docElement('div');drop.className='drop-zone';
+      drop.append(docElement('strong','Arrastra tu archivo aquí'),docElement('p','PDF, JPG o PNG · máximo 10 MB'));
+      const selectedLabel=docElement('p','También puedes elegirlo desde tu equipo.');selectedLabel.className='selected-file';selectedLabel.setAttribute('aria-live','polite');
+      const selectFiles=files=>{if(documentUploadBusy||!result.upload_available)return;if(files.length!==1){status('Selecciona un solo archivo para este documento.');return;}const selected=files[0];if(!selected.size||selected.size>10*1024*1024){status('Selecciona un archivo de hasta 10 MB que no esté vacío.');return;}if(!/\.(pdf|jpe?g|png)$/i.test(selected.name)){status('Selecciona un PDF, JPG o PNG.');return;}selectedFile=selected;selectedLabel.textContent=selected.name+' · '+(selected.size/1024/1024).toFixed(2)+' MB';status('');};
+      file.addEventListener('change',()=>selectFiles(file.files));
+      for(const name of ['dragenter','dragover'])drop.addEventListener(name,e=>{e.preventDefault();if(result.upload_available&&!documentUploadBusy)drop.className='drop-zone drag-active';});
+      drop.addEventListener('dragleave',()=>{drop.className='drop-zone';});
+      drop.addEventListener('drop',e=>{e.preventDefault();drop.className='drop-zone';selectFiles(e.dataTransfer.files);});
+      const choose=docButton('Elegir archivo',async()=>file.click());choose.className='secondary';choose.disabled=!result.upload_available;
+      drop.append(file,choose,selectedLabel);card.append(drop);
+      const progress=docElement('progress');progress.max=100;progress.value=0;progress.hidden=true;progress.setAttribute('aria-label','Progreso de envío de '+item.label);
+      const uploadStatus=docElement('p');uploadStatus.className='upload-status';uploadStatus.setAttribute('role','status');card.append(progress,uploadStatus);
       const upload=docButton(item.status==='received'?'Subir nueva versión':'Subir archivo',async()=>{
-        const selected=file.files[0];if(!selected)throw Error('Selecciona un archivo');
+        const selected=selectedFile;if(!selected)throw Error('Selecciona o arrastra un archivo');
         if(selected.size>10*1024*1024)throw Error('El archivo pesa más de 10 MB');
         const key=state.intake+'/'+item.participant_id+'/'+item.code;
         let attempt=fileAttempts.get(key);
         if(!attempt||attempt.file!==selected){attempt={file:selected,id:crypto.randomUUID()};fileAttempts.set(key,attempt);}
-        const response=await fetch(base+'/uploads/'+attempt.id,{method:'PUT',credentials:'same-origin',headers:{'Content-Type':selected.type||'application/octet-stream'},body:selected});
-        const out=await response.json();if(!response.ok)throw Error(out.detail||'No pudimos guardar el archivo');
-        fileAttempts.delete(key);await loadDocuments();
+        documentUploadBusy=true;documentPanel.setAttribute('aria-busy','true');
+        const controls=[...documentPanel.querySelectorAll('button,input,select')].map(el=>[el,el.disabled]);for(const [el] of controls)el.disabled=true;
+        progress.hidden=false;progress.value=0;uploadStatus.textContent='Enviando archivo…';
+        try{await sendDocument(base+'/uploads/'+attempt.id,selected,value=>{progress.value=value;uploadStatus.textContent=value<100?'Enviando archivo · '+value+'%':'Archivo enviado. Guardando en SharePoint…';});
+          fileAttempts.delete(key);uploadStatus.textContent='Archivo recibido · pendiente de revisión';
+        }catch(error){uploadStatus.textContent=error.message;throw error;}
+        finally{documentUploadBusy=false;documentPanel.setAttribute('aria-busy','false');for(const [el,disabled] of controls)el.disabled=disabled;}
+        await loadDocuments();status('Archivo recibido y guardado en SharePoint. Pendiente de revisión.');
       });upload.disabled=!result.upload_available;card.append(upload);
       for(const source of item.reuse_sources)card.append(docButton('Usar el documento de '+source.label,async()=>{await api(base+'/reuse','POST',{source_participant_id:source.participant_id});await loadDocuments();}));
     }

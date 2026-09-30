@@ -152,6 +152,10 @@ def javascript():
 def stylesheet():
     return Response(Path(__file__).resolve().parent.parent.joinpath('static/app.css').read_text(), media_type='text/css')
 
+@app.get('/firstlease-logo.png')
+def brand_logo():
+    return Response(Path(__file__).resolve().parent.parent.joinpath('static/firstlease-logo.png').read_bytes(),media_type='image/png')
+
 @app.get('/documents.js')
 def documents_javascript():
     return Response(Path(__file__).resolve().parent.parent.joinpath('static/documents.js').read_text(),media_type='application/javascript')
