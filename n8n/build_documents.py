@@ -8,22 +8,30 @@ def node(name,kind,version,x,y,parameters,**extra):
 
 prepare = """
 const body=$input.first().json.body;
+const NodeBuffer=Reflect.get(globalThis,'Buffer');
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const mime={'application/pdf':'pdf','image/jpeg':'jpg','image/png':'png'};
+const mime=new Map([['application/pdf','pdf'],['image/jpeg','jpg'],['image/png','png']]);
 const fail=()=>[{json:{ok:false,version:1,error:'invalid_file'}}];
+if(!body||body.version!==1)return fail();
+if(!NodeBuffer||typeof NodeBuffer.from!=='function')throw new Error('Buffer no está disponible en este entorno');
+const rfc=typeof body.rfc==='string'?body.rfc.trim().toUpperCase():'';
+if(!/^[A-ZÑ&]{3,4}\\d{6}[A-Z0-9]{3}$/.test(rfc))return fail();
 if(!body||body.version!==1||!['upload_id','intake_id','participant_id'].every(k=>typeof body[k]==='string'&&uuid.test(body[k]))||
- typeof body.document_code!=='string'||!/^[a-z_]{1,80}$/.test(body.document_code)||!mime[body.mime_type]||
+ typeof body.document_code!=='string'||!/^[a-z_]{1,80}$/.test(body.document_code)||!mime.has(body.mime_type)||
  typeof body.content_base64!=='string'||body.content_base64.length>13981016||!body.content_base64.length||
  !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(body.content_base64))return fail();
-const data=Buffer.from(body.content_base64,'base64');
+const data=NodeBuffer.from(body.content_base64,'base64');
 if(data.length>10485760||!data.length)return fail();
-let actual=null;
-if(data.subarray(0,5).equals(Buffer.from('%PDF-')))actual='application/pdf';
-if(data.subarray(0,3).equals(Buffer.from([255,216,255])))actual='image/jpeg';
-if(data.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))actual='image/png';
-if(actual!==body.mime_type)return fail();
-const filename=body.intake_id+'_'+body.participant_id+'_'+body.document_code+'_'+body.upload_id+'.'+mime[actual];
-return [{json:{ok:true,file_name:filename,upload_id:body.upload_id},binary:{data:{data:body.content_base64,fileName:filename,fileExtension:mime[actual],mimeType:actual}}}];
+let actual='';
+if(data.subarray(0,5).equals(NodeBuffer.from('%PDF-')))actual='application/pdf';
+if(data.subarray(0,3).equals(NodeBuffer.from([255,216,255])))actual='image/jpeg';
+if(data.subarray(0,8).equals(NodeBuffer.from([137,80,78,71,13,10,26,10])))actual='image/png';
+if(!actual||actual!==body.mime_type)return fail();
+const extension=mime.get(actual);
+if(!extension)return fail();
+const filename=rfc+'-'+body.document_code.replace(/_/g,'-')+'-por-revisar-'+body.upload_id+'.'+extension;
+const output={json:{ok:true,file_name:filename,upload_id:body.upload_id},binary:{data:{data:body.content_base64,fileName:filename,fileExtension:extension,mimeType:actual}}};
+return [output];
 """
 confirm="""
 const response=$input.first().json;

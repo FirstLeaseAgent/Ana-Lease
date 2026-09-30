@@ -146,8 +146,20 @@ class DocumentTests(unittest.TestCase):
         with patch.object(d,'upload_configured',return_value=True),patch.object(d,'store_in_sharepoint',return_value='sharepoint-test-id') as store:
             out=asyncio.run(routes['/intakes/{intake_id}/documents/{participant_id}/{code}/uploads/{upload_id}'](INTAKE,APP,'documento_empresa',UPLOAD,Request()))
         self.assertEqual(out['status'],'received');store.assert_called_once()
+        metadata=store.call_args.args[1]
+        self.assertEqual(metadata['rfc'],self.people[str(APP)]['rfc'])
+        self.assertEqual(metadata['file_name'],f'ABC010101AB1-documento-empresa-por-revisar-{UPLOAD}.pdf')
         self.assertTrue(any("SET status='received'" in query for query,_ in conn.calls))
         self.assertFalse(any(isinstance(value,bytes) for _,params in conn.calls for value in params))
+
+    def test_upload_sends_the_participants_rfc_instead_of_the_applicants(self):
+        routes,_=self.routes()
+        class Request:
+            async def stream(self):yield b'%PDF-1.4\n'
+        with patch.object(d,'upload_configured',return_value=True),patch.object(d,'store_in_sharepoint',return_value='sharepoint-test-id') as store:
+            asyncio.run(routes['/intakes/{intake_id}/documents/{participant_id}/{code}/uploads/{upload_id}'](INTAKE,REP,'documento_persona',UPLOAD,Request()))
+        self.assertEqual(store.call_args.args[1]['rfc'],self.people[str(REP)]['rfc'])
+        self.assertTrue(store.call_args.args[1]['file_name'].startswith('ABCD010101AB1-documento-persona-por-revisar-'))
 
     def test_failed_storage_leaves_the_requirement_pending(self):
         routes,conn=self.routes()

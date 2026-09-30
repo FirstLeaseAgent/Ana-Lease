@@ -150,8 +150,9 @@ def install(app, pool, owner, intake_for_owner, conversation_people, enabled):
         digest=hashlib.sha256(content).hexdigest()
         with pool.connection() as conn:
             with conn.transaction():
-                _,rows=scope(conn,intake_id,user_id)
+                people,rows=scope(conn,intake_id,user_id)
                 requirement(rows,participant_id,code)
+                rfc=people[str(participant_id)]['rfc']
                 previous=conn.execute('SELECT * FROM document_uploads WHERE id=%s',(upload_id,)).fetchone()
                 if previous:
                     if (previous['intake_id']!=intake_id or previous['participant_id']!=participant_id or previous['document_code']!=code or previous['sha256']!=digest):
@@ -164,8 +165,8 @@ def install(app, pool, owner, intake_for_owner, conversation_people, enabled):
                 conn.execute("INSERT INTO document_uploads(id,intake_id,participant_id,document_code,sha256,byte_size,mime_type,status) VALUES(%s,%s,%s,%s,%s,%s,%s,'processing') ON CONFLICT(id) DO UPDATE SET status='processing',updated_at=now()",(upload_id,intake_id,participant_id,code,digest,len(content),mime))
         try:
             storage_id=await run_in_threadpool(d.store_in_sharepoint,content,{'upload_id':str(upload_id),'intake_id':str(intake_id),
-                'participant_id':str(participant_id),'document_code':code,'mime_type':mime,
-                'file_name':f'{intake_id}_{participant_id}_{code}_{upload_id}.{extension}'})
+                'participant_id':str(participant_id),'rfc':rfc,'document_code':code,'mime_type':mime,
+                'file_name':f'{rfc}-{code.replace("_", "-")}-por-revisar-{upload_id}.{extension}'})
             with pool.connection() as conn:
                 with conn.transaction():
                     intake_for_owner(conn,intake_id,user_id,editable=True)
