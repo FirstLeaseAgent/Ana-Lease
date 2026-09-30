@@ -15,7 +15,7 @@ SCHEMA = {
                 'type': {'type': 'string', 'enum': ['add_participant','save_field','reuse_field','focus_participant']},
                 'target_id': {'type': 'string'}, 'source_id': {'type': ['string','null']},
                 'role': {'type': ['string','null'], 'enum': ['aval','representante',None]},
-                'field': {'type': ['string','null'], 'enum': ['rfc','nombre','razon_social','nombre_comercial','actividad','pagina_web','correo_contacto','telefono','ocupacion','cargo',None]},
+                'field': {'type': ['string','null']},
                 'value': {'type': ['string','null']}, 'evidence': {'type': 'string'},
             },
         }},

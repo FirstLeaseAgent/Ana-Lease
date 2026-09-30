@@ -19,8 +19,10 @@ from .mail import send_code
 from .syntage import SyntageUnavailable, check_status
 from .conversation import (ConversationUnavailable, InvalidProposal, active_person,
                            apply_proposal, call_agent, context_for_turn, align_direct_answer,
-                           reply_after_proposal, resume_reply, history_for_turns, capture_stage)
+                           reply_after_proposal, resume_reply, history_for_turns, capture_stage, local_reference, capture_progress)
 from .document_routes import install as install_document_routes
+from . import catalog
+from .catalog_routes import install as install_catalog_routes
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +98,8 @@ def conversation_people(conn, intake_id):
     for a in conn.execute('SELECT participant_id,field_code,value_json FROM answers WHERE intake_id=%s', (intake_id,)).fetchall():
         if isinstance(a['value_json'], str):
             result[str(a['participant_id'])]['answers'][a['field_code']] = a['value_json']
+    config=catalog.snapshot(conn,intake_id)
+    for person in result.values():person['catalog']=config
     return result
 
 def authorization_link(rfc: str):
@@ -238,7 +242,8 @@ def create_intake(body: RfcInput, request: Request):
     link = authorization_link(rfc)
     with pool.connection() as conn:
         with conn.transaction():
-            row = conn.execute('INSERT INTO intakes(owner_id,rfc) VALUES(%s,%s) ON CONFLICT(owner_id,rfc) DO UPDATE SET updated_at=now() RETURNING id,status', (user_id,rfc)).fetchone()
+            _,config=catalog.active(conn)
+            row = conn.execute('INSERT INTO intakes(owner_id,rfc,catalog_snapshot) VALUES(%s,%s,%s) ON CONFLICT(owner_id,rfc) DO UPDATE SET updated_at=now() RETURNING id,status', (user_id,rfc,psycopg.types.json.Jsonb(config))).fetchone()
             conn.execute("INSERT INTO participants(intake_id,role,subject_type,rfc) VALUES(%s,'solicitante',%s,%s) ON CONFLICT DO NOTHING", (row['id'],subject,rfc))
             enabled = conversation_enabled_for(conn, user_id)
             if enabled:
@@ -256,6 +261,7 @@ def read_intake(intake_id: UUID, request: Request):
         answers = conn.execute('SELECT participant_id,field_code FROM answers WHERE intake_id=%s', (intake_id,)).fetchall()
         names = conn.execute("SELECT participant_id,value_json FROM answers WHERE intake_id=%s AND field_code IN ('nombre','razon_social')", (intake_id,)).fetchall()
         enabled = conversation_enabled_for(conn, user_id)
+        configured_people=conversation_people(conn,intake_id)
     hints = {row['participant_id']: masked_name(row['value_json']) for row in names if isinstance(row['value_json'], str)}
     counts = {'aval': 0, 'representante': 0}
     for person in people:
@@ -267,7 +273,8 @@ def read_intake(intake_id: UUID, request: Request):
         if person['id'] in hints:
             person['context'] += f' · {hints[person["id"]]}'
     return {'intake': intake, 'participants': people, 'answers': answers,
-            'fields': {str(p['id']): sorted(FIELDS[p['role']][p['subject_type']]) for p in people},
+            'fields': {pid: [r['code'] for r in catalog.field_rows(p) or []] for pid,p in configured_people.items()},
+            'question_labels':{pid:{f:catalog.question_for(p,f) for f in catalog.fields_for(p)} for pid,p in configured_people.items()},
             'conversation_enabled': enabled}
 
 @app.post('/intakes/{intake_id}/participants')
@@ -297,9 +304,11 @@ def save_answer(intake_id: UUID, participant_id: UUID, body: AnswerInput, reques
     with pool.connection() as conn:
         with conn.transaction():
             intake_for_owner(conn, intake_id, user_id, editable=True)
-            person = conn.execute('SELECT role,subject_type FROM participants WHERE id=%s AND intake_id=%s', (participant_id,intake_id)).fetchone()
-            if not person or not allowed_field(person['role'], person['subject_type'], body.field_code):
+            person=conversation_people(conn,intake_id).get(str(participant_id))
+            if not person or body.field_code not in catalog.fields_for(person):
                 raise HTTPException(422, 'Campo no admitido')
+            try:catalog.validate_value(person,body.field_code,body.value.strip())
+            except ValueError as exc:raise HTTPException(422,str(exc))
             conn.execute('INSERT INTO answers(intake_id,participant_id,field_code,value_json) VALUES(%s,%s,%s,%s) ON CONFLICT(participant_id,field_code) DO UPDATE SET value_json=EXCLUDED.value_json,updated_at=now()', (intake_id,participant_id,body.field_code,psycopg.types.json.Jsonb(body.value.strip())))
             conn.execute('UPDATE intakes SET updated_at=now(),capture_version=capture_version+1 WHERE id=%s', (intake_id,))
     return {'ok': True}
@@ -313,7 +322,7 @@ def resume_conversation(intake_id: UUID, request: Request):
             raise HTTPException(404, 'Conversación no disponible')
         people = conversation_people(conn, intake_id)
         preferred = str(intake['capture_active_id']) if intake['capture_active_id'] else None
-    return {'reply': resume_reply(people, preferred), 'active_id': active_person(people, preferred), 'authorization_links': [], 'stage':capture_stage(people,preferred)}
+    return {'reply': resume_reply(people, preferred), 'active_id': active_person(people, preferred), 'authorization_links': [], 'stage':capture_stage(people,preferred),'progress':capture_progress(people)}
 
 @app.post('/intakes/{intake_id}/conversation')
 def converse(intake_id: UUID, body: ConversationInput, request: Request):
@@ -347,7 +356,7 @@ def converse(intake_id: UUID, body: ConversationInput, request: Request):
             history = history_for_turns(history_rows, people)
     try:
         context, history = context_for_turn(people, preferred, history, body.question, session_email)
-        proposal = call_agent(message, context, history)
+        proposal = local_reference(people,message,preferred,history) or call_agent(message, context, history)
         proposal, alignment = align_direct_answer(proposal, people, message, preferred, context['current_question']['text'])
         updated, audit, active = apply_proposal(people, proposal, message, preferred, session_email)
         if alignment:
@@ -359,7 +368,7 @@ def converse(intake_id: UUID, body: ConversationInput, request: Request):
                 if url:
                     links.append({'url': url, 'context': person['role'].capitalize()})
         reply = reply_after_proposal(proposal, updated, audit, active)
-        response = {'reply': reply, 'active_id': active, 'authorization_links': links,'stage':capture_stage(updated,active)}
+        response = {'reply': reply, 'active_id': active, 'authorization_links': links,'stage':capture_stage(updated,active),'progress':capture_progress(updated)}
         with pool.connection() as conn:
             with conn.transaction():
                 current = intake_for_owner(conn, intake_id, user_id, editable=True)
@@ -409,10 +418,12 @@ def undo_last_answer(intake_id: UUID, request: Request):
             conn.execute('DELETE FROM answers WHERE intake_id=%s AND participant_id=%s AND field_code=%s', (intake_id,change['target_id'],change['field']))
             people = conversation_people(conn, intake_id)
             active = active_person(people, change['target_id'])
-            response = {'reply': resume_reply(people,active), 'active_id': active, 'authorization_links': [],'stage':capture_stage(people,active)}
+            response = {'reply': resume_reply(people,active), 'active_id': active, 'authorization_links': [],'stage':capture_stage(people,active),'progress':capture_progress(people)}
             conn.execute('UPDATE intakes SET capture_version=capture_version+1,capture_active_id=%s,updated_at=now() WHERE id=%s', (active,intake_id))
             reversal = {'type':'undo_save_field','target_id':change['target_id'],'field':change['field'],'request_id':str(turn['request_id'])}
             conn.execute("INSERT INTO capture_turns(intake_id,request_id,user_message,status,response_json,audit_json) VALUES(%s,%s,%s,'complete',%s,%s)", (intake_id,uuid4(),'Deshacer última respuesta',psycopg.types.json.Jsonb(response),psycopg.types.json.Jsonb([reversal])))
     return response
 
 install_document_routes(app,pool,owner,intake_for_owner,conversation_people,conversation_enabled_for)
+
+install_catalog_routes(app,pool,owner)

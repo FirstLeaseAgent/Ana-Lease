@@ -121,3 +121,11 @@ CREATE INDEX IF NOT EXISTS document_dependencies_intake ON document_dependencies
 CREATE INDEX IF NOT EXISTS document_states_intake ON document_states(intake_id);
 CREATE INDEX IF NOT EXISTS document_uploads_intake_created ON document_uploads(intake_id,created_at);
 CREATE INDEX IF NOT EXISTS document_events_intake_created ON document_events(intake_id,created_at);
+
+ALTER TABLE intakes ADD COLUMN IF NOT EXISTS catalog_snapshot jsonb;
+CREATE TABLE IF NOT EXISTS capture_catalogs (
+  id bigserial PRIMARY KEY,
+  actor_id uuid NOT NULL REFERENCES users(id),
+  body jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);

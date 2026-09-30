@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from .rules import FIELDS, masked_name, normalized_rfc
+from .catalog import fields_for, field_rows, question_for, reuse_source, validate_value
 
 MAX_ACTIONS = 16
 COMMON_FIELDS = {'nombre', 'correo_contacto', 'telefono', 'rfc'}
@@ -35,10 +36,12 @@ class InvalidProposal(ValueError):
 
 
 def missing(person):
-    fields = set(FIELDS[person['role']][person['subject_type']])
+    fields = fields_for(person)
     if person['role'] in ('aval', 'representante') and not person.get('rfc'):
         fields.add('rfc')
-    return [f for f in ORDER[person['role']] if f in fields and not (
+    rows=field_rows(person)
+    order=((['rfc'] if person['role'] in ('aval','representante') else [])+[r['code'] for r in rows]) if rows is not None else ORDER[person['role']]
+    return [f for f in order if f in fields and not (
         person.get('rfc') if f == 'rfc' else person['answers'].get(f))]
 
 
@@ -61,6 +64,7 @@ def context_for(people, preferred=None, session_email=None):
          'known_fields': sorted(list(p['answers']) + (['rfc'] if p.get('rfc') else [])),
          'missing_fields': missing(p)} for pid, p in people.items()
     ]}
+    context['capture_schema']=[{'participant_id':pid,'fields':[{'code':r['code'],'question':r['question'],'type':r['type'],'options':r['options']} for r in field_rows(p) or []]} for pid,p in people.items()]
     if session_email:
         context['participants'].append({'id':'session_user','role':'usuario_verificado','subject_type':'PF',
             'hint':'Usuario que inició sesión · correo verificado',
@@ -76,7 +80,7 @@ def context_for_turn(people, preferred, history, shown_question=None, session_em
         raise InvalidProposal('La pregunta cambió; recarga para continuar')
     context = context_for(people, preferred, session_email)
     active = context['active_participant_id']
-    field = missing(people[active])[0] if active and question == canonical else None
+    field = missing(people[active])[0] if active else None
     context['current_question'] = {'text': question, 'participant_id': active, 'field': field}
     options = []
     if active and field in COMMON_FIELDS:
@@ -131,7 +135,7 @@ def align_direct_answer(proposal, people, message, preferred, question):
 
     Explicit field instructions and multi-field proposals remain model decisions.
     """
-    if question != resume_reply(people, preferred) or not isinstance(proposal, dict):
+    if not isinstance(proposal, dict):
         return proposal, None
     active = active_person(people, preferred)
     actions = proposal.get('actions')
@@ -154,6 +158,32 @@ def align_direct_answer(proposal, people, message, preferred, question):
                      'proposed_field': action.get('field'), 'field': expected}
 
 
+def local_reference(people,message,preferred,history):
+    active=active_person(people,preferred)
+    if not active:return None
+    person=people[active]
+    field=missing(person)[0]
+    source_field=reuse_source(person,field)
+    if source_field and person['answers'].get(source_field):
+        normalized=message.casefold().replace('ó','o').strip(' .!?')
+        if re.search(r'\b(no|diferente|distint[oa]|otr[oa])\b',normalized):return None
+        source_label=source_field.replace('_',' ')
+        direct=bool(re.search(r'\b(mism[oa]|igual|iguak|igua)\b',normalized) and source_label in normalized)
+        short=bool(re.fullmatch(r'(?:s[ií][, ]+)?(?:es\s+)?(?:el\s+|la\s+)?(?:igual|iguak|igua|mismo|misma)',normalized))
+        confirmed=normalized==person['role'] and any(source_label in t.get('user','').casefold().replace('ó','o') for t in history[-4:])
+        if direct or short or confirmed:
+            return {'reply':'Usaré el dato ya registrado.','actions':[{'type':'reuse_field','target_id':active,'source_id':active,'role':None,'field':field,'value':None,'evidence':message}]}
+    if re.fullmatch(r'(?:ok[, ]*)?(?:continuemos|contin[uú]a|seguir|adelante)',message.strip(),re.I):
+        return {'reply':resume_reply(people,preferred),'actions':[]}
+    return None
+
+
+def capture_progress(people):
+    total=sum(len(fields_for(p))+(p['role']!='contacto') for p in people.values())
+    completed=sum(sum(bool(p['answers'].get(f)) for f in fields_for(p))+bool(p.get('rfc')) for p in people.values())
+    return {'completed':completed,'total':total,'label':'Captura de datos'}
+
+
 def resume_reply(people, preferred=None):
     active = active_person(people, preferred)
     if not active:
@@ -164,7 +194,7 @@ def resume_reply(people, preferred=None):
             return 'Los datos están guardados. Continuemos con los documentos de esta solicitud.'
         return 'Este avance está guardado. Puedes agregar un aval o representante, o regresar después.'
     person = people[active]
-    return f'Estamos completando la información de {person_hint(person)}. {QUESTIONS[missing(person)[0]]}'
+    return f'Estamos completando la información de {person_hint(person)}. {question_for(person,missing(person)[0])}'
 
 
 def capture_stage(people, preferred=None):
@@ -236,6 +266,7 @@ def apply_proposal(people, proposal, message, preferred=None, session_email=None
                 raise InvalidProposal('Máximo tres avales')
             new_id = str(uuid4())
             result[new_id] = {'id': new_id, 'role': role, 'subject_type': 'PF', 'rfc': None, 'answers': {}}
+            if people and next(iter(people.values())).get('catalog') is not None:result[new_id]['catalog']=next(iter(people.values()))['catalog']
             audit.append({'type': kind, 'target_id': new_id, 'role': role, 'evidence': evidence})
             preferred_id = new_id
             continue
@@ -248,7 +279,9 @@ def apply_proposal(people, proposal, message, preferred=None, session_email=None
         field = action['field']
         if kind == 'reuse_field':
             source_id = action['source_id']
-            if field not in COMMON_FIELDS or action['value'] is not None:
+            alias=reuse_source(target,field)
+            self_name=bool(alias and source_id==target_id)
+            if (field not in COMMON_FIELDS and not self_name) or action['value'] is not None:
                 raise InvalidProposal('El origen no pertenece a esta solicitud o el campo no se puede reutilizar')
             if source_id == 'session_user':
                 if field != 'correo_contacto' or not session_email:
@@ -261,7 +294,7 @@ def apply_proposal(people, proposal, message, preferred=None, session_email=None
                 # Explicitly shared contact channels do not imply the same identity.
                 if field == 'nombre' and source['subject_type'] != 'PF':
                     raise InvalidProposal('La razón social no es el nombre de una persona')
-                value = source.get('rfc') if field == 'rfc' else source['answers'].get(field)
+                value = source.get('rfc') if field == 'rfc' else source['answers'].get(alias if self_name else field)
             if not value:
                 raise InvalidProposal('Ese dato todavía no está capturado')
         else:
@@ -281,13 +314,15 @@ def apply_proposal(people, proposal, message, preferred=None, session_email=None
                 raise InvalidProposal('Revisa el formato del RFC')
             if target['role'] == 'representante' and subject != 'PF':
                 raise InvalidProposal('El RFC del representante debe corresponder a persona física')
-            if any(f not in FIELDS[target['role']][subject] for f in target['answers']):
+            if any(f not in fields_for(target,subject) for f in target['answers']):
                 raise InvalidProposal('El RFC no corresponde al tipo de datos de este participante')
             existing = target.get('rfc')
             target['subject_type'] = subject
         else:
-            if field not in FIELDS[target['role']][target['subject_type']]:
+            if field not in fields_for(target):
                 raise InvalidProposal('El campo no corresponde a ese participante')
+            try:validate_value(target,field,value)
+            except ValueError as exc:raise InvalidProposal(str(exc))
             existing = target['answers'].get(field)
         if existing and existing != value:
             raise InvalidProposal('Ese campo ya tiene otro valor; confirma la corrección con nuestro equipo')

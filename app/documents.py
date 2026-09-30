@@ -27,13 +27,16 @@ def requirements(people, dependencies=None):
         # PM on a representative catalogue row describes the company context,
         # not the representative's own PF RFC.
         scope = 'PM' if person['role'] == 'representante' else person['subject_type']
-        for template in sorted(CATALOG, key=lambda row: row['order']):
+        for template in sorted(person.get('catalog',{}).get('documents',CATALOG), key=lambda row: row['order']):
             if template['role'] != role or template['scope'] != scope:
                 continue
             field = template['dependency_field']
             value = person['answers'].get(field) or dependencies.get((pid,field)) if field else None
             applicable = None if field and not value else (not field or str(value).strip().casefold() == template['dependency_value'].casefold())
-            result.append({**template,'participant_id':pid,'participant':person_hint(person),
+            from .catalog import question_for,field_rows
+            field_spec=next((r for r in field_rows(person) or [] if r['code']==field),None)
+            dependency_options=field_spec['options'] if field_spec else (['Casado','Soltero','Divorciado','Viudo','Unión libre'] if field=='estado_civil' else [])
+            result.append({**template,'dependency_question':question_for(person,field) if field else None,'dependency_options':dependency_options,'participant_id':pid,'participant':person_hint(person),
                            'applicable':applicable})
     return result
 

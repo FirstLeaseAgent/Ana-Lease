@@ -17,6 +17,8 @@ async function loadDocuments(){
   documentPanel.replaceChildren();documentPanel.hidden=false;
   documentPanel.append(docElement('h2','Documentos'),docElement('p',result.message));
   const submitted=result.status==='submitted';
+  const required=result.documents.filter(r=>r.required&&r.applicable!==false).length;
+  setCaptureProgress(submitted?'Solicitud finalizada':'Documentos obligatorios',submitted?1:Math.max(0,required-result.required_missing),submitted?1:required,submitted?'Finalizada · pendiente de revisión':'Datos completos → Documentos → Finalización');
   if(submitted){state.step='submitted';form.hidden=true;documentPanel.className='documents-complete';}else documentPanel.className='';
   if(!submitted&&!result.upload_available)documentPanel.append(docElement('p','La carga de archivos estará disponible en breve. Puedes revisar la lista y dejar pendientes.'));
   const options=docElement('div');options.className='document-actions';
@@ -31,9 +33,9 @@ async function loadDocuments(){
     card.append(docElement('p',labels[item.status]));
     const base='/intakes/'+state.intake+'/documents/'+item.participant_id+'/'+item.code;
     if(!submitted&&item.applicable===null){
-      const label=docElement('label','Para saber si aplica el acta de matrimonio, indica el estado civil:');
-      const input=docElement('select');for(const value of ['', 'Casado','Soltero','Divorciado','Viudo','Unión libre']){const option=docElement('option',value||'Selecciona una opción');option.value=value;input.append(option);}label.append(input);card.append(label);
-      card.append(docButton('Guardar estado civil',async()=>{if(!input.value.trim())throw Error('Indica el estado civil');await api('/intakes/'+state.intake+'/documents/dependency','POST',{participant_id:item.participant_id,field:item.dependency_field,value:input.value.trim()});await loadDocuments();}));
+      const label=docElement('label',item.dependency_question||'Indica '+item.dependency_field.replace(/_/g,' ')+':');
+      const choices=item.dependency_options||[];const input=docElement(choices.length?'select':'input');if(choices.length)for(const value of ['',...choices]){const option=docElement('option',value||'Selecciona una opción');option.value=value;input.append(option);}label.append(input);card.append(label);
+      card.append(docButton('Guardar dato',async()=>{if(!input.value.trim())throw Error('Indica el estado civil');await api('/intakes/'+state.intake+'/documents/dependency','POST',{participant_id:item.participant_id,field:item.dependency_field,value:input.value.trim()});await loadDocuments();}));
     }
     if(!submitted&&item.applicable===true){
       let selectedFile=null;

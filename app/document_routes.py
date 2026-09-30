@@ -30,9 +30,8 @@ def install(app, pool, owner, intake_for_owner, conversation_people, enabled):
         intake_for_owner(conn,intake_id,user_id,editable=editable)
         if not enabled(conn,user_id):
             raise HTTPException(404,'Documentos no disponibles')
-        if not d.CATALOG:
-            raise HTTPException(503,'No pudimos cargar los requisitos documentales; intenta más tarde')
         people = conversation_people(conn,intake_id)
+        if not next(iter(people.values()),{}).get('catalog',{}).get('documents',d.CATALOG):raise HTTPException(503,'No pudimos cargar los requisitos documentales; intenta más tarde')
         if ready and capture_stage(people) != 'documents':
             raise HTTPException(409,'Completa los datos de los participantes antes de continuar con documentos')
         deps = conn.execute('SELECT participant_id,field_code,value FROM document_dependencies WHERE intake_id=%s',(intake_id,)).fetchall()
