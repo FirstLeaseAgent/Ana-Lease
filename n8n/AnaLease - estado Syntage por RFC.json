@@ -1,0 +1,472 @@
+{
+  "name": "AnaLease - Estado Syntage por RFC",
+  "nodes": [
+    {
+      "id": "entrada-rfc",
+      "name": "Entrada RFC",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        200,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "analease-syntage-status",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "validar-rfc",
+      "name": "Validar RFC",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const raw = $input.first().json.body?.rfc;\nconst rfc = typeof raw === 'string' ? raw.trim().toUpperCase() : '';\nconst valid = /^(?:[A-ZÑ&]{3}[0-9]{6}[A-Z0-9]{3}|[A-ZÑ&]{4}[0-9]{6}[A-Z0-9]{3})$/.test(rfc);\nreturn [{json: {valid, rfc: valid ? rfc : undefined, person_type: valid ? (rfc.length === 12 ? 'legal' : 'physical') : undefined}}];"
+      }
+    },
+    {
+      "id": "rfc-valido",
+      "name": "RFC valido",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        640,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "valid-rfc",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "consultar-entidades",
+      "name": "Consultar entidades",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        870,
+        220
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.syntage.com/entities",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $vars.API_SYNTAGE_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "taxpayer.id",
+              "value": "={{ $('Validar RFC').first().json.rfc }}"
+            },
+            {
+              "name": "itemsPerPage",
+              "value": "100"
+            }
+          ]
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "consultar-credenciales-sat",
+      "name": "Consultar credenciales SAT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        220
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.syntage.com/credentials",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $vars.API_SYNTAGE_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "rfc",
+              "value": "={{ $('Validar RFC').first().json.rfc }}"
+            },
+            {
+              "name": "itemsPerPage",
+              "value": "100"
+            }
+          ]
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "evaluar-sat",
+      "name": "Evaluar SAT",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1330,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = $('Validar RFC').first().json;\nfunction unpack(items, kind, limit) {\n  const rows = items.map(item => item.json);\n  if (rows.length === 1 && Array.isArray(rows[0]?.['hydra:member'])) {\n    return {members:rows[0]['hydra:member'],\n            partial:!!rows[0]['hydra:view']?.['hydra:next']};\n  }\n  // With Always Output Data, an empty Syntage result becomes one empty item.\n  if (rows.length === 1 && rows[0] && Object.keys(rows[0]).length === 0) {\n    return {members:[], partial:false};\n  }\n  // Some n8n HTTP Request configurations emit one item per record.\n  if (rows.length && rows.every(x => kind === 'entity'\n      ? typeof x?.taxpayer?.id === 'string'\n      : typeof x?.rfc === 'string' && typeof x?.status === 'string')) {\n    return {members:rows,partial:rows.length >= limit};\n  }\n  return null;\n}\nconst e = unpack($('Consultar entidades').all(), 'entity', 100);\nconst c = unpack($input.all(), 'credential', 100);\nif (!e || !c) {\n  return [{json: {ok:false, error:'syntage_unavailable'}}];\n}\nconst exact = e.members.filter(x => String(x?.taxpayer?.id || '').toUpperCase() === input.rfc);\nconst credential = c.members.filter(x => String(x?.rfc || '').toUpperCase() === input.rfc);\nif (exact.length > 1 || e.partial ||\n    (!credential.some(x => x.status === 'valid') && c.partial)) {\n  return [{json: {ok:false, error:'review_required'}}];\n}\nconst statuses = credential.map(x => x.status);\nconst sat = statuses.includes('valid') ? 'valid' :\n  (statuses.includes('pending') || statuses.includes('waiting')) ? 'pending' :\n  statuses.length ? 'invalid' : 'missing';\nconst id = exact[0]?.id;\nif (id && !/^[0-9a-f-]{36}$/i.test(String(id))) {\n  return [{json: {ok:false, error:'review_required'}}];\n}\nreturn [{json: {\n  ok:true, rfc:input.rfc, person_type:input.person_type,\n  registered:!!id, entity_id:id || null, sat,\n  // No personal data, credentials, or extracted documents enter the response.\n}}];"
+      }
+    },
+    {
+      "id": "entidad-encontrada",
+      "name": "Entidad encontrada",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1550,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "found-entity",
+              "leftValue": "={{ $json.registered }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "consultar-autorizaciones-buro",
+      "name": "Consultar autorizaciones Buro",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1780,
+        130
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://api.syntage.com/entities/' + $('Evaluar SAT').first().json.entity_id + '/datasources/mx/buro-de-credito/authorizations' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $vars.API_SYNTAGE_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "itemsPerPage",
+              "value": "1000"
+            }
+          ]
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "resultado-con-buro",
+      "name": "Resultado con Buro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2010,
+        130
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const base = $('Evaluar SAT').first().json;\nif (!base.ok) return [{json:{ok:false,error:base.error}}];\nconst rows = $input.all().map(item => item.json);\nlet authorizations, partial;\nif (rows.length === 1 && Array.isArray(rows[0]?.['hydra:member'])) {\n  authorizations = rows[0]['hydra:member'];\n  partial = !!rows[0]['hydra:view']?.['hydra:next'];\n} else if (rows.length === 1 && rows[0] && Object.keys(rows[0]).length === 0) {\n  authorizations = [];\n  partial = false;\n} else if (rows.length && rows.every(x => typeof x?.rfc === 'string' &&\n                          (typeof x?.valid === 'boolean' || typeof x?.isValid === 'boolean'))) {\n  authorizations = rows;\n  partial = rows.length >= 1000;\n} else {\n  return [{json:{ok:false,error:'syntage_unavailable'}}];\n}\nconst now = Date.now();\nconst authorized = authorizations.some(a =>\n  String(a?.rfc || '').toUpperCase() === base.rfc &&\n  (a.valid === true || a.isValid === true) && !a.deletedAt &&\n  Number.isFinite(Date.parse(a.authorizedUntil)) && Date.parse(a.authorizedUntil) > now\n);\nif (!authorized && partial) {\n  return [{json:{ok:false,error:'review_required'}}];\n}\nconst buro = authorized ? 'valid' : 'missing';\nconst action = base.sat === 'pending' ? 'wait' :\n  base.sat === 'valid' && buro === 'valid' ? 'continue' : 'onboarding';\nreturn [{json:{ok:true,person_type:base.person_type,registered:true,\n               sat:base.sat,buro,next_action:action}}];"
+      }
+    },
+    {
+      "id": "resultado-sin-entidad",
+      "name": "Resultado sin entidad",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        350
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const base = $input.first().json;\nif (!base.ok) return [{json:{ok:false,error:base.error}}];\n// A standalone credential without a matching entity needs internal review.\nif (base.sat !== 'missing') return [{json:{ok:false,error:'review_required'}}];\nreturn [{json:{ok:true,person_type:base.person_type,registered:false,\n               sat:'missing',buro:'missing',next_action:'onboarding'}}];"
+      }
+    },
+    {
+      "id": "rfc-incorrecto",
+      "name": "RFC incorrecto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        870,
+        460
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{json:{ok:false,error:'invalid_rfc'}}];"
+      }
+    },
+    {
+      "id": "responder-estado",
+      "name": "Responder estado",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2240,
+        130
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": "={{ $json.ok ? 200 : 502 }}"
+        }
+      }
+    },
+    {
+      "id": "responder-sin-entidad",
+      "name": "Responder sin entidad",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2010,
+        350
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": "={{ $json.ok ? 200 : 502 }}"
+        }
+      }
+    },
+    {
+      "id": "responder-rfc-incorrecto",
+      "name": "Responder RFC incorrecto",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1100,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 422
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Entrada RFC": {
+      "main": [
+        [
+          {
+            "node": "Validar RFC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar RFC": {
+      "main": [
+        [
+          {
+            "node": "RFC valido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RFC valido": {
+      "main": [
+        [
+          {
+            "node": "Consultar entidades",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "RFC incorrecto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar entidades": {
+      "main": [
+        [
+          {
+            "node": "Consultar credenciales SAT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar credenciales SAT": {
+      "main": [
+        [
+          {
+            "node": "Evaluar SAT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluar SAT": {
+      "main": [
+        [
+          {
+            "node": "Entidad encontrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Entidad encontrada": {
+      "main": [
+        [
+          {
+            "node": "Consultar autorizaciones Buro",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Resultado sin entidad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar autorizaciones Buro": {
+      "main": [
+        [
+          {
+            "node": "Resultado con Buro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resultado con Buro": {
+      "main": [
+        [
+          {
+            "node": "Responder estado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resultado sin entidad": {
+      "main": [
+        [
+          {
+            "node": "Responder sin entidad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RFC incorrecto": {
+      "main": [
+        [
+          {
+            "node": "Responder RFC incorrecto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false
+  },
+  "active": false
+}
