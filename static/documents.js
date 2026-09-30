@@ -6,10 +6,12 @@ async function loadDocuments(){
   const result=await api('/intakes/'+state.intake+'/documents');
   documentPanel.replaceChildren();documentPanel.hidden=false;
   documentPanel.append(docElement('h2','Documentos'),docElement('p',result.message));
-  if(!result.upload_available)documentPanel.append(docElement('p','La carga de archivos estará disponible en breve. Puedes revisar la lista y dejar pendientes.'));
+  const submitted=result.status==='submitted';
+  if(submitted){state.step='submitted';form.hidden=true;}
+  if(!submitted&&!result.upload_available)documentPanel.append(docElement('p','La carga de archivos estará disponible en breve. Puedes revisar la lista y dejar pendientes.'));
   const options=docElement('div');options.className='document-actions';
   for(const role of ['aval','representante'])options.append(docButton('Agregar otro '+role,async()=>{const out=await api('/intakes/'+state.intake+'/conversation','POST',{request_id:crypto.randomUUID(),message:'Quiero agregar un '+role,question:state.currentQuestion});showConversation(out);}));
-  documentPanel.append(options);
+  if(!submitted)documentPanel.append(options);
   let current='';
   for(const item of result.documents){
     if(item.participant_id!==current){documentPanel.append(docElement('h3',item.participant));current=item.participant_id;}
@@ -18,12 +20,12 @@ async function loadDocuments(){
     const labels={received:'Recibido · pendiente de revisión',pending:'Pendiente',deferred:'Pendiente · lo entregarás después',not_applicable:'No aplica'};
     card.append(docElement('p',labels[item.status]));
     const base='/intakes/'+state.intake+'/documents/'+item.participant_id+'/'+item.code;
-    if(item.applicable===null){
+    if(!submitted&&item.applicable===null){
       const label=docElement('label','Para saber si aplica el acta de matrimonio, indica el estado civil:');
       const input=docElement('select');for(const value of ['', 'Casado','Soltero','Divorciado','Viudo','Unión libre']){const option=docElement('option',value||'Selecciona una opción');option.value=value;input.append(option);}label.append(input);card.append(label);
       card.append(docButton('Guardar estado civil',async()=>{if(!input.value.trim())throw Error('Indica el estado civil');await api('/intakes/'+state.intake+'/documents/dependency','POST',{participant_id:item.participant_id,field:item.dependency_field,value:input.value.trim()});await loadDocuments();}));
     }
-    if(item.applicable===true){
+    if(!submitted&&item.applicable===true){
       const file=docElement('input');file.type='file';file.accept='.pdf,.jpg,.jpeg,.png';file.setAttribute('aria-label','Seleccionar '+item.label);file.disabled=!result.upload_available;
       card.append(file);
       const upload=docButton(item.status==='received'?'Subir nueva versión':'Subir archivo',async()=>{
@@ -38,8 +40,13 @@ async function loadDocuments(){
       });upload.disabled=!result.upload_available;card.append(upload);
       for(const source of item.reuse_sources)card.append(docButton('Usar el documento de '+source.label,async()=>{await api(base+'/reuse','POST',{source_participant_id:source.participant_id});await loadDocuments();}));
     }
-    if(item.applicable!==false&&item.status!=='received')card.append(docButton('No lo tengo ahora',async()=>{await api(base+'/defer','POST',{});await loadDocuments();}));
+    if(!submitted&&item.applicable!==false&&item.status!=='received')card.append(docButton('No lo tengo ahora',async()=>{await api(base+'/defer','POST',{});await loadDocuments();}));
     documentPanel.append(card);
   }
-  documentPanel.append(docElement('p','Los archivos se revisarán después de recibirlos. Tu avance y tus pendientes quedan guardados.'));
+  if(!submitted){
+    documentPanel.append(docElement('p',result.required_missing?'Pendientes obligatorios: '+result.required_missing+'. Tu avance está guardado; puedes regresar después.':'Los documentos obligatorios están recibidos. Los opcionales no impiden finalizar.'));
+    documentPanel.append(docElement('p','Al finalizar se cerrará la captura. Los documentos quedan pendientes de revisión; la solicitud todavía no está aprobada.'));
+    const finish=docButton('Finalizar solicitud',async()=>{await api('/intakes/'+state.intake+'/finalize','POST',{});await loadDocuments();});
+    finish.disabled=result.required_missing>0;documentPanel.append(finish);
+  }
 }

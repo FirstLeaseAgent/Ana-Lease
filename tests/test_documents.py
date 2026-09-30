@@ -54,7 +54,7 @@ class DocumentTests(unittest.TestCase):
     def routes(self,conn=None,authorize=None,people=None):
         conn=conn or FakeConn()
         app=FastAPI()
-        document_routes.install(app,FakePool(conn),lambda request:'owner',authorize or (lambda *args,**kwargs:None),lambda *args:people or self.people,lambda *args:True)
+        document_routes.install(app,FakePool(conn),lambda request:'owner',authorize or (lambda *args,**kwargs:{'status':'open'}),lambda *args:people or self.people,lambda *args:True)
         return {route.path:route.endpoint for route in app.routes},conn
 
     def test_complete_capture_advances_and_incomplete_or_missing_pm_rep_stays(self):
@@ -169,5 +169,33 @@ class DocumentTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as error:asyncio.run(routes['/intakes/{intake_id}/documents/{participant_id}/{code}/uploads/{upload_id}'](INTAKE,APP,'documento_empresa',UPLOAD,Request()))
         self.assertEqual(error.exception.status_code,503)
         self.assertFalse(any(q.startswith('INSERT INTO document_states') for q,_ in conn.calls))
+
+    def test_finalize_blocks_missing_and_unknown_conditional_documents(self):
+        routes,conn=self.routes()
+        with self.assertRaises(HTTPException) as error:routes['/intakes/{intake_id}/finalize'](INTAKE,None)
+        self.assertEqual(error.exception.status_code,409)
+        self.assertFalse(any("status='submitted'" in q for q,_ in conn.calls))
+        conn.states=[{'participant_id':UUID(row['participant_id']),'document_code':row['code'],'status':'received'} for row in d.requirements(self.people)]
+        with self.assertRaises(HTTPException):routes['/intakes/{intake_id}/finalize'](INTAKE,None)
+
+    def test_finalize_accepts_complete_required_documents_and_audits_once(self):
+        people=copy.deepcopy(self.people);people[str(AVAL)]['answers']['estado_civil']='Soltero'
+        routes,conn=self.routes(people=people)
+        conn.states=[{'participant_id':UUID(row['participant_id']),'document_code':row['code'],'status':'received'} for row in d.requirements(people) if row['required'] and row['applicable'] is True]
+        out=routes['/intakes/{intake_id}/finalize'](INTAKE,None)
+        self.assertEqual(out['status'],'submitted')
+        self.assertEqual(sum("status='submitted'" in q for q,_ in conn.calls),1)
+        self.assertEqual(sum(q.startswith('INSERT INTO document_events') for q,_ in conn.calls),1)
+        routes,conn=self.routes(authorize=lambda *args,**kwargs:{'status':'submitted'})
+        self.assertEqual(routes['/intakes/{intake_id}/finalize'](INTAKE,None)['status'],'submitted')
+        self.assertFalse(any(q.startswith('UPDATE') or q.startswith('INSERT') for q,_ in conn.calls))
+        checklist=routes['/intakes/{intake_id}/documents'](INTAKE,None)
+        self.assertEqual(checklist['status'],'submitted');self.assertFalse(checklist['upload_available'])
+
+    def test_finalize_checks_ownership_before_reading_or_writing(self):
+        def deny(*args,**kwargs):raise HTTPException(404,'Captura no encontrada')
+        routes,conn=self.routes(authorize=deny)
+        with self.assertRaises(HTTPException):routes['/intakes/{intake_id}/finalize'](INTAKE,None)
+        self.assertEqual(conn.calls,[])
 
 if __name__=='__main__':unittest.main()

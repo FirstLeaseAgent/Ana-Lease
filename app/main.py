@@ -227,6 +227,10 @@ def create_intake(body: RfcInput, request: Request):
         rfc, subject = normalized_rfc(body.rfc)
     except ValueError:
         raise HTTPException(422, 'Revisa el formato del RFC')
+    with pool.connection() as conn:
+        existing=conn.execute('SELECT id,status FROM intakes WHERE owner_id=%s AND rfc=%s',(user_id,rfc)).fetchone()
+        if existing and existing['status']=='submitted':
+            return {'id':existing['id'],'status':'submitted','authorization_url':None,'conversation_enabled':conversation_enabled_for(conn,user_id)}
     link = authorization_link(rfc)
     with pool.connection() as conn:
         with conn.transaction():

@@ -17,6 +17,7 @@ function nextQuestion(){if(state.index>=state.questions.length){state.step='more
 async function loadIntake(id){
   const data=await api('/intakes/'+id);
   state.intake=id;
+  if(data.intake.status==='submitted'){state.step='submitted';form.hidden=true;await loadDocuments();return;}
   if(data.conversation_enabled){const out=await api('/intakes/'+id+'/conversation');showConversation(out);return;}
   state.participant=null;
   state.questions=[];
@@ -35,7 +36,7 @@ form.addEventListener('submit',async e=>{e.preventDefault();const value=field.va
   try{
     if(state.step==='email'){state.email=value;await api('/auth/start','POST',{email:value});state.step='code';ask('Escribe el código de seis dígitos que enviamos a tu correo.','text');field.inputMode='numeric';}
     else if(state.step==='code'){await api('/auth/verify','POST',{email:state.email,code:value});field.inputMode='text';await showOwnIntakes();}
-    else if(state.step==='rfc'){const result=await api('/intakes','POST',{rfc:value});bubble('Gracias. Vamos a completar los datos de esta solicitud.');if(!authorization(result.authorization_url,result.id))await loadIntake(result.id);}
+    else if(state.step==='rfc'){const result=await api('/intakes','POST',{rfc:value});if(result.status==='submitted'){await loadIntake(result.id);}else{bubble('Gracias. Vamos a completar los datos de esta solicitud.');if(!authorization(result.authorization_url,result.id))await loadIntake(result.id);}}
     else if(state.step==='authorization_ack'){if(value.toUpperCase()!=='OK'){ask('Para continuar, escribe OK. La autorización se realiza por separado en la liga de Syntage.');}else{await loadIntake(state.pendingIntakeId);state.pendingIntakeId=null;}}
     else if(state.step==='conversation'){if(!state.pendingTurn||state.pendingTurn.message!==value){state.pendingTurn={request_id:crypto.randomUUID(),message:value,question:state.currentQuestion};}const out=await api('/intakes/'+state.intake+'/conversation','POST',state.pendingTurn);state.pendingTurn=null;if(!conversationAuthorization(out))showConversation(out);}
     else if(state.step==='conversation_ack'){if(value.toUpperCase()!=='OK'){ask('Escribe OK para seguir con la captura. La autorización se realiza en Syntage.');}else{showConversation(state.pendingChatReply);}}

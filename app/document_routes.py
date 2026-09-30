@@ -26,8 +26,8 @@ class ReuseDocumentInput(BaseModel):
 
 
 def install(app, pool, owner, intake_for_owner, conversation_people, enabled):
-    def scope(conn,intake_id,user_id,ready=True):
-        intake_for_owner(conn,intake_id,user_id,editable=True)
+    def scope(conn,intake_id,user_id,ready=True,editable=True):
+        intake_for_owner(conn,intake_id,user_id,editable=editable)
         if not enabled(conn,user_id):
             raise HTTPException(404,'Documentos no disponibles')
         if not d.CATALOG:
@@ -59,14 +59,15 @@ def install(app, pool, owner, intake_for_owner, conversation_people, enabled):
     def checklist(intake_id:UUID,request:Request):
         user_id=owner(request)
         with pool.connection() as conn:
-            people,rows=scope(conn,intake_id,user_id)
+            intake=intake_for_owner(conn,intake_id,user_id)
+            people,rows=scope(conn,intake_id,user_id,editable=False)
             states=conn.execute('SELECT participant_id,document_code,status,upload_id FROM document_states WHERE intake_id=%s',(intake_id,)).fetchall()
         state={(str(s['participant_id']),s['document_code']):s for s in states}
         missing=0
         for row in rows:
             current=state.get((row['participant_id'],row['code']),{})
             row['status']='not_applicable' if row['applicable'] is False else current.get('status','pending')
-            if row['required'] and row['applicable'] is not False and row['status']!='received':
+            if row['required'] and row['applicable'] is not False and (row['applicable'] is not True or row['status']!='received'):
                 missing+=1
             target=people[row['participant_id']]
             row['reuse_sources']=[]
@@ -77,9 +78,30 @@ def install(app, pool, owner, intake_for_owner, conversation_people, enabled):
                         and people[source['participant_id']].get('rfc')==target['rfc']
                         and source['applicable'] is True and source_state.get('status')=='received'):
                         row['reuse_sources'].append({'participant_id':source['participant_id'],'label':source['participant']})
-        return {'documents':rows,'required_missing':missing,'upload_available':d.upload_configured(),
-                'message':('Los documentos obligatorios están recibidos y pendientes de revisión.' if not missing
+        submitted=intake['status']=='submitted'
+        return {'documents':rows,'status':intake['status'],'required_missing':missing,'upload_available':not submitted and d.upload_configured(),
+                'message':('Solicitud finalizada. Tus datos y documentos quedaron guardados y pendientes de revisión. Esto no implica aprobación.' if submitted
+                           else 'Los documentos obligatorios están recibidos. Ya puedes finalizar tu solicitud.' if not missing
                            else 'Continúa con los documentos pendientes. Si no tienes alguno ahora, puedes dejarlo pendiente y regresar después.')}
+
+    @app.post('/intakes/{intake_id}/finalize')
+    def finalize(intake_id:UUID,request:Request):
+        user_id=owner(request)
+        with pool.connection() as conn:
+            with conn.transaction():
+                intake=intake_for_owner(conn,intake_id,user_id)
+                people,rows=scope(conn,intake_id,user_id,editable=False)
+                if intake['status']=='submitted':return {'ok':True,'status':'submitted'}
+                if conn.execute("SELECT 1 FROM document_uploads WHERE intake_id=%s AND status='processing' AND updated_at>now()-interval '90 seconds' LIMIT 1",(intake_id,)).fetchone():
+                    raise HTTPException(409,'Hay un archivo que todavía se está guardando. Espera a que termine antes de finalizar.')
+                states=conn.execute("SELECT participant_id,document_code,status FROM document_states WHERE intake_id=%s",(intake_id,)).fetchall()
+                received={(str(s['participant_id']),s['document_code']) for s in states if s['status']=='received'}
+                missing=sum(1 for row in rows if row['required'] and row['applicable'] is not False and (row['applicable'] is not True or (row['participant_id'],row['code']) not in received))
+                if missing:raise HTTPException(409,f'Faltan {missing} documentos obligatorios o datos que determinan si aplican. Completa los pendientes antes de finalizar.')
+                applicant=next(p for p in people.values() if p['role']=='solicitante')
+                conn.execute("UPDATE intakes SET status='submitted',updated_at=now() WHERE id=%s AND owner_id=%s",(intake_id,user_id))
+                event(conn,intake_id,user_id,applicant['id'],None,'finalize',{'recognition_started':False})
+        return {'ok':True,'status':'submitted'}
 
     @app.post('/intakes/{intake_id}/documents/dependency')
     def dependency(intake_id:UUID,body:DependencyInput,request:Request):
