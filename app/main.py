@@ -19,7 +19,7 @@ from .mail import send_code
 from .syntage import SyntageUnavailable, check_status
 from .conversation import (ConversationUnavailable, InvalidProposal, active_person,
                            apply_proposal, call_agent, context_for_turn, align_direct_answer,
-                           reply_after_proposal, resume_reply)
+                           reply_after_proposal, resume_reply, history_for_turns)
 
 logger = logging.getLogger(__name__)
 
@@ -330,8 +330,8 @@ def converse(intake_id: UUID, body: ConversationInput, request: Request):
             preferred = str(intake['capture_active_id']) if intake['capture_active_id'] else None
             version = intake['capture_version']
             session_email = conn.execute('SELECT email FROM users WHERE id=%s', (user_id,)).fetchone()['email']
-            history_rows = conn.execute("SELECT user_message,response_json FROM capture_turns WHERE intake_id=%s AND status='complete' ORDER BY created_at DESC LIMIT 4", (intake_id,)).fetchall()
-            history = [{'user': r['user_message'], 'assistant': r['response_json']['reply']} for r in reversed(history_rows)]
+            history_rows = conn.execute("SELECT user_message,response_json,audit_json FROM capture_turns WHERE intake_id=%s AND status='complete' ORDER BY created_at DESC LIMIT 4", (intake_id,)).fetchall()
+            history = history_for_turns(history_rows, people)
     try:
         context, history = context_for_turn(people, preferred, history, body.question, session_email)
         proposal = call_agent(message, context, history)

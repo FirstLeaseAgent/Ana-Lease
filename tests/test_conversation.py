@@ -155,6 +155,42 @@ class ConversationTest(unittest.TestCase):
         bad['actions'][0]['field']='nombre'
         with self.assertRaises(c.InvalidProposal):c.apply_proposal(self.people,bad,message,'contact',session_email='verified@example.test')
 
+    def test_rfc_reference_offers_aval_as_source_and_copies_to_representative(self):
+        people={'aval':person('aval','aval',rfc='ABCD010101AB1',nombre='Nombre de prueba',ocupacion='Socio',correo_contacto='prueba@example.test',telefono='5551234567'),
+                'rep':person('rep','representante',nombre='Nombre de prueba',correo_contacto='prueba@example.test',telefono='5551234567'),
+                'company':person('company','solicitante','PM',rfc='ABC010101AB1')}
+        context,_=c.context_for_turn(people,'rep',[],c.resume_reply(people,'rep'))
+        self.assertEqual(context['current_question']['reuse_options'],[
+            {'type':'reuse_field','target_id':'rep','source_id':'aval','source_role':'aval','field':'rfc'}])
+        message='Es igua el del aval'
+        proposal={'reply':'¿Cuál es su cargo?','actions':[action('reuse_field','rep','rfc',source='aval',evidence=message)]}
+        updated,audit,active=c.apply_proposal(people,proposal,message,'rep')
+        self.assertEqual(updated['rep']['rfc'],people['aval']['rfc'])
+        self.assertEqual(c.missing(updated['rep']),['cargo'])
+        self.assertIn('cargo',c.reply_after_proposal(proposal,updated,audit,active))
+
+    def test_recent_capture_uses_audited_target_roles_without_saved_values(self):
+        people={'aval':person('aval','aval',rfc='ABCD010101AB1',nombre='Nombre de prueba')}
+        rows=[{'user_message':'igual','response_json':{'reply':'Este avance está guardado'},
+               'audit_json':[{'type':'reuse_field','target_id':'aval','source_id':'contact','field':'telefono'},
+                             {'type':'focus_participant','target_id':'other-intake'}]}]
+        history=c.history_for_turns(rows,people)
+        self.assertEqual(history[0]['capture_targets'],[{'id':'aval','role':'aval','fields':['telefono']}])
+        context,_=c.context_for_turn(people,'aval',history)
+        self.assertEqual(context['recent_capture_participant_ids'],['aval'])
+        self.assertNotIn('ABCD010101AB1',json.dumps(context))
+        self.assertNotIn('Nombre de prueba',json.dumps(context))
+
+    def test_same_aval_can_fill_four_representative_fields_but_not_cargo(self):
+        people={'aval':person('aval','aval',rfc='ABCD010101AB1',nombre='Nombre de prueba',ocupacion='Socio',correo_contacto='prueba@example.test',telefono='5551234567')}
+        message='representante igual son los mismos datos'
+        proposal={'reply':'¿Cuál es su cargo?','actions':[action('add_participant','new',role='representante',evidence=message),
+            *[action('reuse_field','new',field,source='aval',evidence=message) for field in ('rfc','nombre','correo_contacto','telefono')]]}
+        updated,audit,active=c.apply_proposal(people,proposal,message)
+        self.assertEqual(updated[active]['rfc'],people['aval']['rfc'])
+        self.assertEqual(c.missing(updated[active]),['cargo'])
+        self.assertNotIn('ocupacion',updated[active]['answers'])
+
     def test_rfc_sets_aval_type_and_representative_rejects_company_rfc(self):
         message='Agregar aval ABC010101AB1'
         proposal={'reply':'¿Cuál es la razón social?', 'actions':[action('add_participant','new',role='aval',evidence=message),action('save_field','new','rfc','ABC010101AB1',evidence=message)]}

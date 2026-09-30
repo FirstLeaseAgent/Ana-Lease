@@ -78,11 +78,52 @@ def context_for_turn(people, preferred, history, shown_question=None, session_em
     active = context['active_participant_id']
     field = missing(people[active])[0] if active and question == canonical else None
     context['current_question'] = {'text': question, 'participant_id': active, 'field': field}
+    options = []
+    if active and field in COMMON_FIELDS:
+        target = people[active]
+        for source_id, source in people.items():
+            if source_id == active:
+                continue
+            known = bool(source.get('rfc')) if field == 'rfc' else bool(source['answers'].get(field))
+            compatible = not (field == 'nombre' and source['subject_type'] != 'PF')
+            if field == 'rfc' and target['role'] == 'representante':
+                compatible = source['subject_type'] == 'PF'
+            if known and compatible:
+                options.append({'type':'reuse_field','target_id':active,'source_id':source_id,
+                                'source_role':source['role'],'field':field})
+        if session_email and field == 'correo_contacto':
+            options.append({'type':'reuse_field','target_id':active,'source_id':'session_user',
+                            'source_role':'usuario_verificado','field':field})
+    context['current_question']['reuse_options'] = options
+    recent_ids = []
+    for turn in reversed(history):
+        for target in reversed(turn.get('capture_targets', [])):
+            pid = target.get('id')
+            if pid in people and pid not in recent_ids:
+                recent_ids.append(pid)
+    context['recent_capture_participant_ids'] = recent_ids
     # Resuming a request shows a server question, not necessarily the last old turn.
     recent = list(history[-3:])
     if not recent or recent[-1].get('assistant') != question:
         recent.append({'user': '', 'assistant': question})
     return context, recent
+
+
+def history_for_turns(rows, people):
+    history = []
+    for row in reversed(rows):
+        targets = {}
+        for action in row.get('audit_json') or []:
+            if action.get('type') not in ('save_field','reuse_field','add_participant'):
+                continue
+            pid = action.get('target_id')
+            if pid in people:
+                target = targets.setdefault(pid, {'id':pid,'role':people[pid]['role'],'fields':[]})
+                if action.get('field') and action['field'] not in target['fields']:
+                    target['fields'].append(action['field'])
+        history.append({'user':row['user_message'],'assistant':row['response_json']['reply'],
+                        'capture_targets':list(targets.values())})
+    return history
 
 
 def align_direct_answer(proposal, people, message, preferred, question):
