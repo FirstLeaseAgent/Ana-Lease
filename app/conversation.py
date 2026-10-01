@@ -176,9 +176,11 @@ def local_reference(people,message,preferred,history):
     if not active:return None
     person=people[active]
     field=missing(person)[0]
-    normalized=message.casefold().strip(' .!?')
-    same_contact = bool(re.fullmatch(
-        r'(?:soy yo[,; ]+)?(?:es|soy) (?:el mismo|la misma)(?: que)? (?:el |la )?contacto', normalized))
+    normalized=' '.join(message.casefold().strip(' .!?').split())
+    same_contact = not any(mark in message for mark in ('?', '¿')) and bool(re.fullmatch(
+        r'(?:soy yo[,; ]+)?(?:es|soy) (?:el mismo|la misma)(?: que)? (?:el |la )?contacto'
+        r'|(?:los )?datos (?:del representante(?: legal)? )?son (?:los mismos|iguales)'
+        r'(?: que| a)? (?:(?:los )?(?:datos )?(?:del|de la)|el|la) contacto', normalized))
     if person['role']=='representante' and same_contact:
         sources=[(pid,p) for pid,p in people.items() if p['role']=='contacto' and p['subject_type']=='PF']
         if len(sources)==1:

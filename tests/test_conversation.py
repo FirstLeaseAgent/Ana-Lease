@@ -90,6 +90,40 @@ class ConversationTest(unittest.TestCase):
         people['rep']['answers']['nombre']='Nombre distinto'
         self.assertIsNone(c.local_reference(people,'es el mismo que el contacto','rep',[]))
 
+    def test_representative_data_declaration_copies_all_three_fields_in_one_turn(self):
+        for message in (
+            'lOS DATOS DEL REPRESENTANTE SON LOS MISMOS QUE EL CONTACTO',
+            'Los datos del representante legal son iguales a los del contacto',
+            'los datos son los mismos del contacto',
+            'Los datos del representante son los mismos que los datos del contacto',
+            '  LOS  DATOS DEL REPRESENTANTE SON LOS MISMOS QUE EL CONTACTO.  ',
+        ):
+            with self.subTest(message=message):
+                people=copy.deepcopy(self.people)
+                people['rep']=person('rep','representante',rfc='ABCD010101AB1')
+                proposal=c.local_reference(people,message,'rep',[])
+                updated,audit,active=c.apply_proposal(people,proposal,message,'rep')
+                self.assertEqual(updated['rep']['answers'],people['contact']['answers'])
+                self.assertEqual([a['field'] for a in audit],['nombre','correo_contacto','telefono'])
+                cargo={'reply':'Continuamos','actions':[action('save_field','rep','cargo',
+                       'Director General',evidence='Director General')]}
+                final,audit,active=c.apply_proposal(updated,cargo,'Director General','rep')
+                self.assertEqual(c.missing(final['rep']),[])
+                reply=c.reply_after_proposal(cargo,final,audit,active)
+                self.assertNotIn('¿Cuál es el correo de contacto?',reply)
+                self.assertNotIn('¿Cuál es el teléfono?',reply)
+
+    def test_data_declaration_does_not_treat_individual_contact_channels_as_identity(self):
+        people=copy.deepcopy(self.people)
+        people['rep']=person('rep','representante',rfc='ABCD010101AB1')
+        for message in ('El teléfono del representante es el mismo del contacto',
+                        'El correo del representante es el mismo del contacto',
+                        'Los datos del representante no son los mismos que el contacto',
+                        '¿Los datos del representante son los mismos que el contacto?',
+                        'Los datos del representante son los mismos que el contacto?'):
+            with self.subTest(message=message):
+                self.assertIsNone(c.local_reference(people,message,'rep',[]))
+
     def test_contact_identity_reuses_only_available_missing_fields(self):
         people=copy.deepcopy(self.people)
         del people['contact']['answers']['telefono']
