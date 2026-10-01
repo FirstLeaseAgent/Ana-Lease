@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from .rules import FIELDS, masked_name, normalized_rfc
 from .catalog import fields_for, field_rows, question_for, reuse_source, validate_value
-from .memory import model_memory, relations_from_actions
+from .memory import model_memory, relations_from_actions, identity_members
 
 MAX_ACTIONS = 16
 COMMON_FIELDS = {'nombre', 'correo_contacto', 'telefono', 'rfc'}
@@ -173,22 +173,60 @@ def align_direct_answer(proposal, people, message, preferred, question):
                      'proposed_field': action.get('field'), 'field': expected}
 
 
-def same_contact_declaration(message):
-    normalized=' '.join(message.casefold().strip(' .!?').split())
-    return not any(mark in message for mark in ('?', '¿')) and bool(re.fullmatch(
-        r'(?:soy yo[,; ]+)?(?:es|soy) (?:el mismo|la misma)(?: que)? (?:el |la )?contacto'
-        r'|(?:los )?datos (?:del representante(?: legal)? )?son (?:los mismos|iguales)'
-        r'(?: que| a)? (?:(?:los )?(?:datos )?(?:del|de la)|el|la) contacto', normalized))
+def identity_reference(message):
+    """Resolve explicit role references; field-only sharing is not identity."""
+    if any(mark in message for mark in ('?', '¿')):
+        return None
+    text=' '.join(message.casefold().strip(' .!').split())
+    text=re.sub(r'^soy yo[,; ]+', '', text)
+    roles=r'(?:solicitante|contacto|aval|representante(?: legal)?)'
+    create=re.match(r'(?:(?:quiero|vamos a) )?(?:agrega|agregar|añade|añadir) '
+                    r'(?:(?:al|a la|un|una|otro|otra|el|la) )?('+roles+r')[,;:]?\s*',text)
+    created_role=create.group(1).replace(' legal','') if create else None
+    if create:
+        text=text[create.end():]
+    source=r'(?P<source>'+roles+r')(?: (?P<source_index>[1-3]))?'
+    target=r'(?P<target>'+roles+r')(?: (?P<target_index>[1-3]))?'
+    patterns=[
+        r'(?:(?:el |la )?'+target+r' )?(?:es|soy) (?:el mismo|la misma)(?: que)? (?:el |la )?'+source,
+        r'(?:los )?datos (?:(?:del|de la) '+target+r' )?son (?:los mismos|iguales)'
+        r'(?: que| a)? (?:(?:los )?(?:datos )?(?:del|de la)|el|la) '+source,
+    ]
+    match=next((m for pattern in patterns if (m:=re.fullmatch(pattern,text))),None)
+    if not match:
+        return None
+    target_role=(match.group('target') or created_role)
+    target_role=target_role.replace(' legal','') if target_role else None
+    if created_role and target_role!=created_role:
+        return None
+    return {'target_role':target_role,'target_index':match.group('target_index'),
+            'source_role':match.group('source').replace(' legal',''),
+            'source_index':match.group('source_index'),'create':bool(create)}
+
+
+def source_for_reference(people, reference):
+    candidates=[pid for pid,p in people.items() if p['role']==reference['source_role']]
+    index=reference['source_index']
+    if index:
+        return candidates[int(index)-1] if int(index)<=len(candidates) else None
+    return candidates[0] if len(candidates)==1 else None
 
 
 def identity_audit(people, audit, message):
     """Persist an explicit identity statement only after validated data reuse."""
-    if not same_contact_declaration(message):
+    reference=identity_reference(message)
+    if not reference:
         return []
-    candidates={ (a['target_id'],a['source_id']) for a in audit
-                 if a.get('type')=='reuse_field' and a.get('source_id') in people
-                 and people[a['source_id']]['role']=='contacto'
-                 and people[a['target_id']]['role']=='representante' }
+    source=source_for_reference(people,reference)
+    candidates={ (a['target_id'],source) for a in audit
+                 if a.get('type')=='reuse_field' and source in people
+                 and a.get('target_id') in people
+                 and a['target_id']!=source
+                 and (not reference['target_role'] or people[a['target_id']]['role']==reference['target_role']) }
+    candidates.update((a['target_id'],source) for a in audit
+                      if a.get('type')=='focus_participant' and a.get('target_id') in people
+                      and source in people and a['target_id']!=source
+                      and (not reference['target_role'] or people[a['target_id']]['role']==reference['target_role']))
     if len(candidates)!=1:
         return []
     target,source=next(iter(candidates))
@@ -198,31 +236,81 @@ def identity_audit(people, audit, message):
 
 def local_reference(people,message,preferred,history,relations=None):
     active=active_person(people,preferred)
+    reference=identity_reference(message)
+    if reference:
+        source_id=source_for_reference(people,reference)
+        if not source_id:
+            return {'reply':'Indica cuál '+reference['source_role']+' deseas utilizar; si hay varios, indica su número.','actions':[]}
+        source=people[source_id]
+        if source['subject_type']!='PF':
+            return {'reply':'Ese participante es una persona moral. Indica una persona física para reutilizar su identidad.','actions':[]}
+        role=reference['target_role'] or (people[active]['role'] if active else None)
+        source_group=identity_members(people,relations or [],source_id)
+        source_rfcs={people[pid]['rfc'] for pid in source_group if people[pid].get('rfc')}
+        known_rfc=next(iter(source_rfcs)) if len(source_rfcs)==1 else None
+        if role==source['role']:
+            return {'reply':'Ese participante ya está registrado. Indica el otro rol que deseas completar.','actions':[]}
+        targets=[pid for pid,p in people.items() if p['role']==role]
+        target_index=reference['target_index']
+        target_id=None
+        if target_index:
+            target_id=targets[int(target_index)-1] if int(target_index)<=len(targets) else None
+            if not target_id:
+                return {'reply':'No encontramos ese participante en esta solicitud. Indica a quién te refieres.','actions':[]}
+        elif not reference['create']:
+            target_id=active if active in targets else (targets[0] if len(targets)==1 else None)
+            if len(targets)>1 and not target_id:
+                return {'reply':'Indica cuál '+str(role)+' deseas completar.','actions':[]}
+        if reference['create'] or not targets:
+            # An existing same-role RFC is focused instead of creating a duplicate.
+            existing=[pid for pid in targets if known_rfc and people[pid].get('rfc')==known_rfc]
+            if len(existing)==1:
+                target_id=existing[0]
+        if target_id==source_id:
+            return {'reply':'Ese participante ya está registrado. Indica el otro rol que deseas completar.','actions':[]}
+        actions=[]
+        if target_id is None:
+            if role not in ('aval','representante'):
+                return None
+            target_id='new'
+            person={'role':role,'subject_type':'PF','rfc':None,'answers':{}}
+            if source.get('catalog') is not None:person['catalog']=source['catalog']
+            actions.append({'type':'add_participant','target_id':'new','source_id':None,
+                            'role':role,'field':None,'value':None,'evidence':message})
+        else:
+            person=people[target_id]
+        if person['subject_type']!='PF':
+            return {'reply':'El participante de destino es una persona moral; no podemos reutilizar una identidad PF para ese rol.','actions':[]}
+        shared=('rfc','nombre','correo_contacto','telefono')
+        def value(p,f):return p.get('rfc') if f=='rfc' else p['answers'].get(f)
+        target_group=identity_members(people,relations or [],target_id) if target_id in people else set()
+        group=source_group | target_group
+        if any(len({value(people[pid],f) for pid in group if value(people[pid],f)} |
+                   ({value(person,f)} if value(person,f) else set()))>1 for f in shared):
+            return {'reply':'Los datos capturados entran en conflicto. Confirma la corrección con nuestro equipo antes de reutilizarlos.','actions':[]}
+        allowed=fields_for(person) | ({'rfc'} if role in ('aval','representante') else set())
+        for f in shared:
+            if f not in allowed or value(person,f):continue
+            origins=[pid for pid in people if pid in source_group and value(people[pid],f)]
+            origin=source_id if source_id in origins else (origins[0] if origins else None)
+            if origin:
+                actions.append({'type':'reuse_field','target_id':target_id,'source_id':origin,
+                                'role':None,'field':f,'value':None,'evidence':message})
+        if not actions:
+            actions=[{'type':'focus_participant','target_id':target_id,'source_id':None,
+                      'role':None,'field':None,'value':None,'evidence':message}]
+        return {'reply':'Usaré los datos disponibles de la misma persona.','actions':actions}
     if not active:return None
     person=people[active]
     field=missing(person)[0]
-    if person['role']=='representante' and same_contact_declaration(message):
-        sources=[(pid,p) for pid,p in people.items() if p['role']=='contacto' and p['subject_type']=='PF']
-        if len(sources)==1:
-            source_id,source=sources[0]
-            # Identity confirmation copies common data together, within this intake.
-            # Existing conflicts require clarification rather than partial copying.
-            shared=('nombre','correo_contacto','telefono')
-            conflict=any(person['answers'].get(f) and source['answers'].get(f) and
-                         person['answers'][f]!=source['answers'][f] for f in shared)
-            actions=[{'type':'reuse_field','target_id':active,'source_id':source_id,
-                      'role':None,'field':f,'value':None,'evidence':message}
-                     for f in shared if f in fields_for(person) and not person['answers'].get(f)
-                     and source['answers'].get(f)]
-            if actions and not conflict:
-                return {'reply':'Usaré los datos del contacto.','actions':actions}
     if field in COMMON_FIELDS and re.fullmatch(r'(?:es |son )?(?:el |la |los )?(?:mismo|misma|mismos|igual)',message.strip(' .!'),re.I):
-        candidates={r['source_id'] for r in relations or [] if r.get('type')=='same_person'
-                    and r.get('target_id')==active and r.get('source_id') in people
-                    and (people[r['source_id']].get('rfc') if field=='rfc' else people[r['source_id']]['answers'].get(field))}
-        if len(candidates)==1:
+        linked=identity_members(people,relations or [],active)
+        candidates=[pid for pid in people if pid in linked and pid!=active and
+                    (people[pid].get('rfc') if field=='rfc' else people[pid]['answers'].get(field))]
+        values={people[pid].get('rfc') if field=='rfc' else people[pid]['answers'][field] for pid in candidates}
+        if len(values)==1:
             return {'reply':'Usaré el dato de la misma persona ya confirmada.','actions':[
-                {'type':'reuse_field','target_id':active,'source_id':next(iter(candidates)),
+                {'type':'reuse_field','target_id':active,'source_id':candidates[0],
                  'role':None,'field':field,'value':None,'evidence':message}]}
     source_field=reuse_source(person,field)
     if source_field and person['answers'].get(source_field):

@@ -85,10 +85,10 @@ class ConversationTest(unittest.TestCase):
         self.assertIsNone(c.local_reference(people,'no es el mismo que el contacto','rep',[]))
         self.assertIsNone(c.local_reference(people,'soy yo también','rep',[]))
         people['other']=person('other','contacto',nombre='Otra persona')
-        self.assertIsNone(c.local_reference(people,'es el mismo que el contacto','rep',[]))
+        self.assertEqual(c.local_reference(people,'es el mismo que el contacto','rep',[])['actions'],[])
         del people['other']
         people['rep']['answers']['nombre']='Nombre distinto'
-        self.assertIsNone(c.local_reference(people,'es el mismo que el contacto','rep',[]))
+        self.assertEqual(c.local_reference(people,'es el mismo que el contacto','rep',[])['actions'],[])
 
     def test_representative_data_declaration_copies_all_three_fields_in_one_turn(self):
         for message in (
