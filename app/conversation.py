@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from .rules import FIELDS, masked_name, normalized_rfc
 from .catalog import fields_for, field_rows, question_for, reuse_source, validate_value
+from .memory import model_memory, relations_from_actions
 
 MAX_ACTIONS = 16
 COMMON_FIELDS = {'nombre', 'correo_contacto', 'telefono', 'rfc'}
@@ -72,7 +73,7 @@ def context_for(people, preferred=None, session_email=None):
     return context
 
 
-def context_for_turn(people, preferred, history, shown_question=None, session_email=None):
+def context_for_turn(people, preferred, history, shown_question=None, session_email=None, relations=None):
     canonical = resume_reply(people, preferred)
     question = shown_question or canonical
     last_reply = history[-1].get('assistant') if history else None
@@ -106,6 +107,7 @@ def context_for_turn(people, preferred, history, shown_question=None, session_em
             if pid in people and pid not in recent_ids:
                 recent_ids.append(pid)
     context['recent_capture_participant_ids'] = recent_ids
+    context['conversation_memory'] = model_memory(relations or [], history)
     # Resuming a request shows a server question, not necessarily the last old turn.
     recent = list(history[-3:])
     if not recent or recent[-1].get('assistant') != question:
@@ -171,17 +173,35 @@ def align_direct_answer(proposal, people, message, preferred, question):
                      'proposed_field': action.get('field'), 'field': expected}
 
 
-def local_reference(people,message,preferred,history):
+def same_contact_declaration(message):
+    normalized=' '.join(message.casefold().strip(' .!?').split())
+    return not any(mark in message for mark in ('?', '¿')) and bool(re.fullmatch(
+        r'(?:soy yo[,; ]+)?(?:es|soy) (?:el mismo|la misma)(?: que)? (?:el |la )?contacto'
+        r'|(?:los )?datos (?:del representante(?: legal)? )?son (?:los mismos|iguales)'
+        r'(?: que| a)? (?:(?:los )?(?:datos )?(?:del|de la)|el|la) contacto', normalized))
+
+
+def identity_audit(people, audit, message):
+    """Persist an explicit identity statement only after validated data reuse."""
+    if not same_contact_declaration(message):
+        return []
+    candidates={ (a['target_id'],a['source_id']) for a in audit
+                 if a.get('type')=='reuse_field' and a.get('source_id') in people
+                 and people[a['source_id']]['role']=='contacto'
+                 and people[a['target_id']]['role']=='representante' }
+    if len(candidates)!=1:
+        return []
+    target,source=next(iter(candidates))
+    event={'type':'confirm_identity','target_id':target,'source_id':source,'evidence':message}
+    return [event] if relations_from_actions(people,[event]) else []
+
+
+def local_reference(people,message,preferred,history,relations=None):
     active=active_person(people,preferred)
     if not active:return None
     person=people[active]
     field=missing(person)[0]
-    normalized=' '.join(message.casefold().strip(' .!?').split())
-    same_contact = not any(mark in message for mark in ('?', '¿')) and bool(re.fullmatch(
-        r'(?:soy yo[,; ]+)?(?:es|soy) (?:el mismo|la misma)(?: que)? (?:el |la )?contacto'
-        r'|(?:los )?datos (?:del representante(?: legal)? )?son (?:los mismos|iguales)'
-        r'(?: que| a)? (?:(?:los )?(?:datos )?(?:del|de la)|el|la) contacto', normalized))
-    if person['role']=='representante' and same_contact:
+    if person['role']=='representante' and same_contact_declaration(message):
         sources=[(pid,p) for pid,p in people.items() if p['role']=='contacto' and p['subject_type']=='PF']
         if len(sources)==1:
             source_id,source=sources[0]
@@ -196,6 +216,14 @@ def local_reference(people,message,preferred,history):
                      and source['answers'].get(f)]
             if actions and not conflict:
                 return {'reply':'Usaré los datos del contacto.','actions':actions}
+    if field in COMMON_FIELDS and re.fullmatch(r'(?:es |son )?(?:el |la |los )?(?:mismo|misma|mismos|igual)',message.strip(' .!'),re.I):
+        candidates={r['source_id'] for r in relations or [] if r.get('type')=='same_person'
+                    and r.get('target_id')==active and r.get('source_id') in people
+                    and (people[r['source_id']].get('rfc') if field=='rfc' else people[r['source_id']]['answers'].get(field))}
+        if len(candidates)==1:
+            return {'reply':'Usaré el dato de la misma persona ya confirmada.','actions':[
+                {'type':'reuse_field','target_id':active,'source_id':next(iter(candidates)),
+                 'role':None,'field':field,'value':None,'evidence':message}]}
     source_field=reuse_source(person,field)
     if source_field and person['answers'].get(source_field):
         normalized=message.casefold().replace('ó','o').strip(' .!?')
@@ -255,6 +283,16 @@ def reply_after_proposal(proposal, people, audit, preferred=None):
     # Keep free-form clarifications when no capture action was accepted.
     if audit:
         return resume_reply(people, preferred)
+    active=active_person(people,preferred)
+    if active:
+        expected=missing(people[active])[0]
+        # A model clarification may not skip to a different capture question
+        # when no field was committed. Genuine clarification text is preserved.
+        for person in people.values():
+            for field in fields_for(person) | {'rfc'}:
+                if question_for(person,field) in proposal['reply'] and (
+                        person['id']!=active or field!=expected):
+                    return resume_reply(people,preferred)
     return redact_reply(proposal['reply'], people)
 
 

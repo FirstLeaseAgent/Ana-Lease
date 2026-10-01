@@ -19,7 +19,8 @@ from .mail import send_code
 from .syntage import SyntageUnavailable, check_status
 from .conversation import (ConversationUnavailable, InvalidProposal, active_person,
                            apply_proposal, call_agent, context_for_turn, align_direct_answer,
-                           reply_after_proposal, resume_reply, history_for_turns, capture_stage, local_reference, capture_progress)
+                           reply_after_proposal, resume_reply, history_for_turns, capture_stage, local_reference, capture_progress, identity_audit)
+from .memory import load_relations
 from .document_routes import install as install_document_routes
 from . import catalog
 from .catalog_routes import install as install_catalog_routes
@@ -352,13 +353,15 @@ def converse(intake_id: UUID, body: ConversationInput, request: Request):
             preferred = str(intake['capture_active_id']) if intake['capture_active_id'] else None
             version = intake['capture_version']
             session_email = conn.execute('SELECT email FROM users WHERE id=%s', (user_id,)).fetchone()['email']
-            history_rows = conn.execute("SELECT user_message,response_json,audit_json FROM capture_turns WHERE intake_id=%s AND status='complete' ORDER BY created_at DESC LIMIT 4", (intake_id,)).fetchall()
+            history_rows = conn.execute("SELECT user_message,response_json,audit_json FROM capture_turns WHERE intake_id=%s AND status='complete' ORDER BY updated_at DESC,request_id DESC LIMIT 12", (intake_id,)).fetchall()
             history = history_for_turns(history_rows, people)
+            relations = load_relations(conn,intake_id,people,session_email)
     try:
-        context, history = context_for_turn(people, preferred, history, body.question, session_email)
-        proposal = local_reference(people,message,preferred,history) or call_agent(message, context, history)
+        context, history = context_for_turn(people, preferred, history, body.question, session_email, relations)
+        proposal = local_reference(people,message,preferred,history,relations) or call_agent(message, context, history)
         proposal, alignment = align_direct_answer(proposal, people, message, preferred, context['current_question']['text'])
         updated, audit, active = apply_proposal(people, proposal, message, preferred, session_email)
+        audit.extend(identity_audit(updated,audit,message))
         if alignment:
             audit.append(alignment)
         links = []
