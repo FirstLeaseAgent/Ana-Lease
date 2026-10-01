@@ -42,6 +42,64 @@ class ConversationTest(unittest.TestCase):
         proposal={'reply':'¿A cuál representante te refieres?', 'actions':[]}
         self.assertEqual(c.reply_after_proposal(proposal,self.people,[]),proposal['reply'])
 
+    def test_plain_cargo_is_saved_when_model_repeats_the_question_without_actions(self):
+        people=copy.deepcopy(self.people)
+        people['rep']=person('rep','representante',rfc='ABCD010101AB1',nombre='Nombre de prueba',
+                             correo_contacto='prueba@example.test',telefono='5551234567')
+        proposal={'reply':'Gracias. ¿Cuál es su cargo?','actions':[]}
+        aligned,alignment=c.align_direct_answer(proposal,people,'Socio','rep',c.resume_reply(people,'rep'))
+        updated,audit,active=c.apply_proposal(people,aligned,'Socio','rep')
+        self.assertEqual(updated['rep']['answers']['cargo'],'Socio')
+        self.assertEqual(c.missing(updated['rep']),[])
+        self.assertNotIn('¿Cuál es su cargo?',c.reply_after_proposal(aligned,updated,audit,active))
+        self.assertEqual(alignment['field'],'cargo')
+        self.assertEqual(proposal['actions'],[])
+
+    def test_cargo_fallback_preserves_uncertainty_references_and_other_questions(self):
+        people={'rep':person('rep','representante',rfc='ABCD010101AB1',nombre='Nombre de prueba')}
+        for message in ('no sé','soy yo','el mismo del contacto','¿Socio?','ok'):
+            proposal={'reply':'Gracias. ¿Cuál es su cargo?','actions':[]}
+            aligned,alignment=c.align_direct_answer(proposal,people,message,'rep',c.resume_reply(people,'rep'))
+            self.assertIs(aligned,proposal)
+            self.assertIsNone(alignment)
+        proposal={'reply':'¿Te refieres al cargo actual o anterior?','actions':[]}
+        aligned,alignment=c.align_direct_answer(proposal,people,'Socio','rep',c.resume_reply(people,'rep'))
+        self.assertIs(aligned,proposal)
+        self.assertIsNone(alignment)
+
+    def test_explicit_existing_representative_identity_reuses_all_contact_fields(self):
+        people=copy.deepcopy(self.people)
+        people['rep']=person('rep','representante',rfc='ABCD010101AB1')
+        message='soy yo, es el mismo que el contacto'
+        proposal=c.local_reference(people,message,'rep',[])
+        updated,audit,active=c.apply_proposal(people,proposal,message,'rep')
+        self.assertEqual(updated['rep']['answers'],people['contact']['answers'])
+        self.assertEqual(c.missing(updated['rep']),['cargo'])
+        self.assertEqual(len(audit),3)
+        self.assertIn('¿Cuál es su cargo?',c.reply_after_proposal(proposal,updated,audit,active))
+
+    def test_contact_identity_does_not_copy_conflicts_ambiguous_or_field_only_references(self):
+        people=copy.deepcopy(self.people)
+        people['rep']=person('rep','representante',rfc='ABCD010101AB1')
+        self.assertIsNone(c.local_reference(people,'el mismo del contacto','rep',[]))
+        self.assertIsNone(c.local_reference(people,'no es el mismo que el contacto','rep',[]))
+        self.assertIsNone(c.local_reference(people,'soy yo también','rep',[]))
+        people['other']=person('other','contacto',nombre='Otra persona')
+        self.assertIsNone(c.local_reference(people,'es el mismo que el contacto','rep',[]))
+        del people['other']
+        people['rep']['answers']['nombre']='Nombre distinto'
+        self.assertIsNone(c.local_reference(people,'es el mismo que el contacto','rep',[]))
+
+    def test_contact_identity_reuses_only_available_missing_fields(self):
+        people=copy.deepcopy(self.people)
+        del people['contact']['answers']['telefono']
+        people['rep']=person('rep','representante',rfc='ABCD010101AB1',nombre='Nombre de prueba')
+        message='es el mismo que el contacto'
+        proposal=c.local_reference(people,message,'rep',[])
+        updated,audit,_=c.apply_proposal(people,proposal,message,'rep')
+        self.assertEqual([a['field'] for a in audit],['correo_contacto'])
+        self.assertEqual(c.missing(updated['rep']),['cargo','telefono'])
+
     def test_resume_question_overrides_old_web_question_in_model_context(self):
         people={'applicant':person('applicant','solicitante','PM',razon_social='Empresa de prueba')}
         shown=c.resume_reply(people,'applicant')

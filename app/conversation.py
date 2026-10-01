@@ -139,6 +139,19 @@ def align_direct_answer(proposal, people, message, preferred, question):
         return proposal, None
     active = active_person(people, preferred)
     actions = proposal.get('actions')
+    # A repeated cargo question must not discard a plain answer to that field.
+    # Preserve questions, uncertainty and identity references as model decisions.
+    if active and actions == [] and missing(people[active])[0] == 'cargo':
+        value = message.strip()
+        repeated = question_for(people[active], 'cargo') in proposal.get('reply', '')
+        scalar = bool(re.fullmatch(r'[A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ &/.-]{0,79}', value))
+        conversational = re.search(r'\b(no|se|sé|soy|yo|mismo|misma|contacto|correo|teléfono|rfc|corrige|cambia|agrega|ok|hola|cuál|cual|qué|que|puedo|puede|ayuda)\b', value, re.I)
+        if repeated and scalar and not conversational:
+            aligned = copy.deepcopy(proposal)
+            aligned['actions'] = [{'type':'save_field','target_id':active,'source_id':None,
+                                  'role':None,'field':'cargo','value':value,'evidence':value}]
+            return aligned, {'type':'align_direct_answer','target_id':active,
+                             'proposed_field':None,'field':'cargo'}
     if not active or not isinstance(actions, list) or len(actions) != 1:
         return proposal, None
     action = actions[0]
@@ -163,6 +176,24 @@ def local_reference(people,message,preferred,history):
     if not active:return None
     person=people[active]
     field=missing(person)[0]
+    normalized=message.casefold().strip(' .!?')
+    same_contact = bool(re.fullmatch(
+        r'(?:soy yo[,; ]+)?(?:es|soy) (?:el mismo|la misma)(?: que)? (?:el |la )?contacto', normalized))
+    if person['role']=='representante' and same_contact:
+        sources=[(pid,p) for pid,p in people.items() if p['role']=='contacto' and p['subject_type']=='PF']
+        if len(sources)==1:
+            source_id,source=sources[0]
+            # Identity confirmation copies common data together, within this intake.
+            # Existing conflicts require clarification rather than partial copying.
+            shared=('nombre','correo_contacto','telefono')
+            conflict=any(person['answers'].get(f) and source['answers'].get(f) and
+                         person['answers'][f]!=source['answers'][f] for f in shared)
+            actions=[{'type':'reuse_field','target_id':active,'source_id':source_id,
+                      'role':None,'field':f,'value':None,'evidence':message}
+                     for f in shared if f in fields_for(person) and not person['answers'].get(f)
+                     and source['answers'].get(f)]
+            if actions and not conflict:
+                return {'reply':'Usaré los datos del contacto.','actions':actions}
     source_field=reuse_source(person,field)
     if source_field and person['answers'].get(source_field):
         normalized=message.casefold().replace('ó','o').strip(' .!?')
