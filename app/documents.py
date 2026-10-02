@@ -7,7 +7,7 @@ import os
 from urllib.parse import urlsplit
 
 CATALOG = json.loads(os.environ.get('ANALEASE_DOCUMENT_CATALOG','[]'))
-ROLES = {'solicitante':'Solicitante','aval':'Aval','representante':'RepresentanteLegal'}
+ROLES = {'solicitante':'Solicitante','aval':'Aval','representante':'RepresentanteLegal','accionista':'Accionista'}
 MAX_BYTES = 10 * 1024 * 1024
 
 

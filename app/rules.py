@@ -2,6 +2,7 @@ import re
 
 RFC_RE = re.compile(r'^(?:[A-ZÑ&]{3}[0-9]{6}[A-Z0-9]{3}|[A-ZÑ&]{4}[0-9]{6}[A-Z0-9]{3})$')
 FIELDS = {
+    'accionista': {'PF': {'nombre', 'curp', 'porcentaje_participacion'}, 'PM': {'razon_social', 'porcentaje_participacion'}},
     'contacto': {'PF': {'nombre', 'correo_contacto', 'telefono'}, 'PM': set()},
     'solicitante': {
         'PF': {'nombre', 'correo_contacto', 'telefono', 'actividad', 'pagina_web'},

@@ -35,7 +35,7 @@ CREATE INDEX IF NOT EXISTS intakes_owner ON intakes(owner_id);
 CREATE TABLE IF NOT EXISTS participants (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   intake_id uuid NOT NULL REFERENCES intakes(id) ON DELETE CASCADE,
-  role text NOT NULL CHECK (role IN ('solicitante','contacto','aval','representante')),
+  role text NOT NULL CHECK (role IN ('solicitante','contacto','aval','representante','accionista')),
   subject_type text NOT NULL CHECK (subject_type IN ('PF','PM')),
   rfc text,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -43,7 +43,18 @@ CREATE TABLE IF NOT EXISTS participants (
 );
 ALTER TABLE participants DROP CONSTRAINT IF EXISTS participants_role_check;
 ALTER TABLE participants ADD CONSTRAINT participants_role_check
-  CHECK (role IN ('solicitante','contacto','aval','representante'));
+  CHECK (role IN ('solicitante','contacto','aval','representante','accionista'));
+ALTER TABLE participants ADD COLUMN IF NOT EXISTS company_id uuid;
+ALTER TABLE participants DROP CONSTRAINT IF EXISTS participants_company_fkey;
+ALTER TABLE participants ADD CONSTRAINT participants_company_fkey
+  FOREIGN KEY (company_id,intake_id) REFERENCES participants(id,intake_id);
+ALTER TABLE participants DROP CONSTRAINT IF EXISTS participants_shareholder_company_check;
+ALTER TABLE participants ADD CONSTRAINT participants_shareholder_company_check
+  CHECK ((role='accionista' AND company_id IS NOT NULL) OR (role<>'accionista' AND company_id IS NULL));
+CREATE UNIQUE INDEX IF NOT EXISTS shareholder_company_rfc ON participants(intake_id,company_id,rfc) WHERE role='accionista' AND rfc IS NOT NULL;
+ALTER TABLE intakes ADD COLUMN IF NOT EXISTS shareholders_enabled boolean NOT NULL DEFAULT false;
+ALTER TABLE intakes ADD COLUMN IF NOT EXISTS shareholders_complete boolean NOT NULL DEFAULT false;
+ALTER TABLE intakes ADD COLUMN IF NOT EXISTS guarantors_complete boolean NOT NULL DEFAULT false;
 ALTER TABLE intakes ADD COLUMN IF NOT EXISTS capture_version bigint NOT NULL DEFAULT 0;
 ALTER TABLE intakes ADD COLUMN IF NOT EXISTS capture_active_id uuid;
 CREATE UNIQUE INDEX IF NOT EXISTS one_applicant ON participants(intake_id) WHERE role='solicitante';

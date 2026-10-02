@@ -1,6 +1,6 @@
 const editor=document.querySelector('#admin-editor'),adminStatus=document.querySelector('#admin-status');
 let draft=null,baseVersion=0,validated=false,busy=false;
-const fieldColumns=[['role','Rol',['solicitante','contacto','aval','representante']],['subject_type','Persona',['PF','PM']],['code','Código'],['label','Nombre'],['question','Pregunta'],['type','Tipo',['text','email','phone','url','select']],['order','Orden','number'],['enabled','Activa','boolean'],['reuse_from','Copiar de'],['options','Opciones']];
+const fieldColumns=[['role','Rol',['solicitante','contacto','representante','accionista','aval']],['subject_type','Persona',['PF','PM']],['code','Código'],['label','Nombre'],['question','Pregunta'],['type','Tipo',['text','email','phone','url','select']],['order','Orden','number'],['enabled','Activa','boolean'],['reuse_from','Copiar de'],['options','Opciones']];
 const docColumns=[['scope','PF/PM',['PF','PM']],['role','Rol',['Solicitante','Aval','RepresentanteLegal','Accionista']],['code','Código'],['label','Nombre'],['order','Orden','number'],['required','Obligatorio','boolean'],['dependency_field','Campo de condición'],['dependency_value','Valor de condición']];
 function el(tag,text){const n=document.createElement(tag);if(text)n.textContent=text;return n;}
 function changed(){validated=false;document.querySelector('#publish-catalog').disabled=true;document.querySelector('#catalog-preview').textContent='Borrador modificado. Valida antes de publicar.';}

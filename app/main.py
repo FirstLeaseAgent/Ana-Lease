@@ -13,6 +13,7 @@ from pydantic import BaseModel, EmailStr, Field
 import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
+from psycopg.types.json import Jsonb
 
 from .rules import FIELDS, allowed_field, masked_name, normalized_rfc, participant_from_rfc
 from .mail import send_code
@@ -24,6 +25,7 @@ from .memory import load_relations
 from .document_routes import install as install_document_routes
 from . import catalog
 from .catalog_routes import install as install_catalog_routes
+from . import shareholders
 
 logger = logging.getLogger(__name__)
 
@@ -94,13 +96,17 @@ def conversation_enabled_for(conn, user_id):
     return bool(user and user['email'].lower() in allowed)
 
 def conversation_people(conn, intake_id):
-    people = conn.execute("SELECT id,role,subject_type,rfc FROM participants WHERE intake_id=%s ORDER BY CASE role WHEN 'solicitante' THEN 0 WHEN 'contacto' THEN 1 ELSE 2 END,created_at,id", (intake_id,)).fetchall()
+    people = conn.execute("SELECT id,role,subject_type,rfc,company_id FROM participants WHERE intake_id=%s ORDER BY CASE role WHEN 'solicitante' THEN 0 WHEN 'contacto' THEN 1 WHEN 'representante' THEN 2 WHEN 'accionista' THEN 3 ELSE 4 END,created_at,id", (intake_id,)).fetchall()
     result = {str(p['id']): dict(p, id=str(p['id']), answers={}) for p in people}
     for a in conn.execute('SELECT participant_id,field_code,value_json FROM answers WHERE intake_id=%s', (intake_id,)).fetchall():
         if isinstance(a['value_json'], str):
             result[str(a['participant_id'])]['answers'][a['field_code']] = a['value_json']
     config=catalog.snapshot(conn,intake_id)
-    for person in result.values():person['catalog']=config
+    controls=conn.execute('SELECT shareholders_enabled,shareholders_complete,guarantors_complete FROM intakes WHERE id=%s',(intake_id,)).fetchone() or {}
+    for person in result.values():
+        person['catalog']=config
+        if person.get('company_id'):person['company_id']=str(person['company_id'])
+        if person['role']=='solicitante':person.update({key:bool(controls.get(key)) for key in ('shareholders_enabled','shareholders_complete','guarantors_complete')})
     return result
 
 def authorization_link(rfc: str):
@@ -244,7 +250,7 @@ def create_intake(body: RfcInput, request: Request):
     with pool.connection() as conn:
         with conn.transaction():
             _,config=catalog.active(conn)
-            row = conn.execute('INSERT INTO intakes(owner_id,rfc,catalog_snapshot) VALUES(%s,%s,%s) ON CONFLICT(owner_id,rfc) DO UPDATE SET updated_at=now() RETURNING id,status', (user_id,rfc,psycopg.types.json.Jsonb(config))).fetchone()
+            row = conn.execute('INSERT INTO intakes(owner_id,rfc,catalog_snapshot,shareholders_enabled) VALUES(%s,%s,%s,%s) ON CONFLICT(owner_id,rfc) DO UPDATE SET updated_at=now() RETURNING id,status', (user_id,rfc,psycopg.types.json.Jsonb(config),subject=='PM')).fetchone()
             conn.execute("INSERT INTO participants(intake_id,role,subject_type,rfc) VALUES(%s,'solicitante',%s,%s) ON CONFLICT DO NOTHING", (row['id'],subject,rfc))
             enabled = conversation_enabled_for(conn, user_id)
             if enabled:
@@ -258,13 +264,13 @@ def read_intake(intake_id: UUID, request: Request):
     user_id = owner(request)
     with pool.connection() as conn:
         intake = intake_for_owner(conn, intake_id, user_id)
-        people = conn.execute("SELECT id,role,subject_type FROM participants WHERE intake_id=%s ORDER BY CASE role WHEN 'solicitante' THEN 0 WHEN 'contacto' THEN 1 ELSE 2 END,created_at,id", (intake_id,)).fetchall()
+        people = conn.execute("SELECT id,role,subject_type FROM participants WHERE intake_id=%s ORDER BY CASE role WHEN 'solicitante' THEN 0 WHEN 'contacto' THEN 1 WHEN 'representante' THEN 2 WHEN 'accionista' THEN 3 ELSE 4 END,created_at,id", (intake_id,)).fetchall()
         answers = conn.execute('SELECT participant_id,field_code FROM answers WHERE intake_id=%s', (intake_id,)).fetchall()
         names = conn.execute("SELECT participant_id,value_json FROM answers WHERE intake_id=%s AND field_code IN ('nombre','razon_social')", (intake_id,)).fetchall()
         enabled = conversation_enabled_for(conn, user_id)
         configured_people=conversation_people(conn,intake_id)
     hints = {row['participant_id']: masked_name(row['value_json']) for row in names if isinstance(row['value_json'], str)}
-    counts = {'aval': 0, 'representante': 0}
+    counts = {'aval': 0, 'representante': 0,'accionista':0}
     for person in people:
         role = person['role']
         if role in counts:
@@ -276,12 +282,13 @@ def read_intake(intake_id: UUID, request: Request):
     return {'intake': intake, 'participants': people, 'answers': answers,
             'fields': {pid: [r['code'] for r in catalog.field_rows(p) or []] for pid,p in configured_people.items()},
             'question_labels':{pid:{f:catalog.question_for(p,f) for f in catalog.fields_for(p)} for pid,p in configured_people.items()},
-            'conversation_enabled': enabled}
+            'conversation_enabled': enabled,'stage':capture_stage(configured_people),
+            'next_reply':resume_reply(configured_people),'next_active_id':active_person(configured_people)}
 
 @app.post('/intakes/{intake_id}/participants')
 def add_participant(intake_id: UUID, body: ParticipantInput, request: Request):
     user_id = owner(request)
-    if body.role not in ('aval','representante'):
+    if body.role not in ('aval','representante','accionista'):
         raise HTTPException(422, 'Tipo de participante inválido')
     try:
         rfc, subject = participant_from_rfc(body.role, body.rfc)
@@ -295,7 +302,16 @@ def add_participant(intake_id: UUID, body: ParticipantInput, request: Request):
                 n = conn.execute("SELECT count(*) AS n FROM participants WHERE intake_id=%s AND role='aval'", (intake_id,)).fetchone()['n']
                 if n >= 3:
                     raise HTTPException(409, 'Máximo tres avales')
-            row = conn.execute('INSERT INTO participants(intake_id,role,subject_type,rfc) VALUES(%s,%s,%s,%s) RETURNING id', (intake_id,body.role,subject,rfc)).fetchone()
+                conn.execute('UPDATE intakes SET guarantors_complete=false WHERE id=%s',(intake_id,))
+            company_id=None
+            if body.role=='accionista':
+                people=conversation_people(conn,intake_id);company=shareholders.applicant(people)
+                if not company or company['subject_type']!='PM':raise HTTPException(422,'Solo se agregan accionistas a una empresa solicitante')
+                if sum(p['role']=='accionista' for p in people.values())>=shareholders.MAX_SHAREHOLDERS:raise HTTPException(409,'Máximo tres principales accionistas')
+                if any(p['role']=='accionista' and p.get('rfc')==rfc for p in people.values()):raise HTTPException(409,'Ese accionista ya está registrado en esta empresa')
+                company_id=company['id']
+                conn.execute('UPDATE intakes SET shareholders_enabled=true,shareholders_complete=false WHERE id=%s',(intake_id,))
+            row = conn.execute('INSERT INTO participants(intake_id,role,subject_type,rfc,company_id) VALUES(%s,%s,%s,%s,%s) RETURNING id', (intake_id,body.role,subject,rfc,company_id)).fetchone()
             conn.execute('UPDATE intakes SET capture_version=capture_version+1 WHERE id=%s', (intake_id,))
     return {'id': row['id'], 'authorization_url': link}
 
@@ -310,6 +326,13 @@ def save_answer(intake_id: UUID, participant_id: UUID, body: AnswerInput, reques
                 raise HTTPException(422, 'Campo no admitido')
             try:catalog.validate_value(person,body.field_code,body.value.strip())
             except ValueError as exc:raise HTTPException(422,str(exc))
+            if person['role']=='accionista':
+                updated=conversation_people(conn,intake_id)
+                existing=person['answers'].get(body.field_code)
+                if existing and existing!=body.value.strip():raise HTTPException(409,'Ese dato ya está registrado; confirma la corrección con nuestro equipo')
+                updated[str(participant_id)]['answers'][body.field_code]=body.value.strip()
+                try:shareholders.validate_people(updated)
+                except ValueError as exc:raise HTTPException(422,str(exc))
             conn.execute('INSERT INTO answers(intake_id,participant_id,field_code,value_json) VALUES(%s,%s,%s,%s) ON CONFLICT(participant_id,field_code) DO UPDATE SET value_json=EXCLUDED.value_json,updated_at=now()', (intake_id,participant_id,body.field_code,psycopg.types.json.Jsonb(body.value.strip())))
             conn.execute('UPDATE intakes SET updated_at=now(),capture_version=capture_version+1 WHERE id=%s', (intake_id,))
     return {'ok': True}
@@ -381,13 +404,16 @@ def converse(intake_id: UUID, body: ConversationInput, request: Request):
                     raise HTTPException(404, 'Conversación no disponible')
                 for pid, person in updated.items():
                     if pid not in people:
-                        conn.execute('INSERT INTO participants(id,intake_id,role,subject_type,rfc) VALUES(%s,%s,%s,%s,%s)', (pid,intake_id,person['role'],person['subject_type'],person['rfc']))
+                        conn.execute('INSERT INTO participants(id,intake_id,role,subject_type,rfc,company_id) VALUES(%s,%s,%s,%s,%s,%s)', (pid,intake_id,person['role'],person['subject_type'],person['rfc'],person.get('company_id')))
                     elif (person['rfc'],person['subject_type']) != (people[pid]['rfc'],people[pid]['subject_type']):
                         conn.execute('UPDATE participants SET rfc=%s,subject_type=%s WHERE id=%s AND intake_id=%s', (person['rfc'],person['subject_type'],pid,intake_id))
                     for code, value in person['answers'].items():
                         if value != people.get(pid, {}).get('answers', {}).get(code):
                             conn.execute('INSERT INTO answers(intake_id,participant_id,field_code,value_json) VALUES(%s,%s,%s,%s)', (intake_id,pid,code,psycopg.types.json.Jsonb(value)))
                 conn.execute('UPDATE intakes SET capture_version=capture_version+1,capture_active_id=%s,updated_at=now() WHERE id=%s', (active,intake_id))
+                company=shareholders.applicant(updated)
+                if company and any(company.get(key)!=people[company['id']].get(key) for key in ('shareholders_enabled','shareholders_complete','guarantors_complete')):
+                    conn.execute('UPDATE intakes SET shareholders_enabled=%s,shareholders_complete=%s,guarantors_complete=%s WHERE id=%s',(bool(company.get('shareholders_enabled')),bool(company.get('shareholders_complete')),bool(company.get('guarantors_complete')),intake_id))
                 conn.execute("UPDATE capture_turns SET status='complete',response_json=%s,audit_json=%s,updated_at=now() WHERE intake_id=%s AND request_id=%s", (psycopg.types.json.Jsonb(response),psycopg.types.json.Jsonb(audit),intake_id,body.request_id))
         return response
     except (ConversationUnavailable, InvalidProposal, HTTPException) as exc:
@@ -430,3 +456,28 @@ def undo_last_answer(intake_id: UUID, request: Request):
 install_document_routes(app,pool,owner,intake_for_owner,conversation_people,conversation_enabled_for)
 
 install_catalog_routes(app,pool,owner)
+
+@app.post('/intakes/{intake_id}/shareholders/complete')
+def complete_shareholders(intake_id:UUID,request:Request):
+    """Equivalent explicit completion for the non-AI capture UI."""
+    return complete_participant_list(intake_id,request,'listo accionistas')
+
+@app.post('/intakes/{intake_id}/guarantors/complete')
+def complete_guarantors(intake_id:UUID,request:Request):
+    return complete_participant_list(intake_id,request,'listo avales')
+
+def complete_participant_list(intake_id,request,message):
+    uid=owner(request)
+    with pool.connection() as conn:
+        with conn.transaction():
+            intake_for_owner(conn,intake_id,uid,editable=True)
+            people=conversation_people(conn,intake_id)
+            proposal=local_reference(people,message,None,[])
+            if not proposal or not proposal['actions']:raise HTTPException(409,'Completa los datos antes de cerrar esta lista')
+            try:updated,audit,active=apply_proposal(people,proposal,message)
+            except InvalidProposal as exc:raise HTTPException(422,str(exc))
+            company=shareholders.applicant(updated)
+            conn.execute('UPDATE intakes SET shareholders_complete=%s,guarantors_complete=%s,capture_version=capture_version+1 WHERE id=%s',(bool(company.get('shareholders_complete')),bool(company.get('guarantors_complete')),intake_id))
+            response={'reply':resume_reply(updated,active),'active_id':active,'stage':capture_stage(updated,active),'progress':capture_progress(updated),'authorization_links':[]}
+            conn.execute("INSERT INTO capture_turns(intake_id,request_id,user_message,status,response_json,audit_json) VALUES(%s,%s,%s,'complete',%s,%s)",(intake_id,uuid4(),message,Jsonb(response),Jsonb(audit)))
+    return response

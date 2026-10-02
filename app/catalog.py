@@ -3,8 +3,9 @@ import copy
 import re
 from io import BytesIO
 from .rules import FIELDS
+from . import shareholders
 
-ROLES={'solicitante','contacto','aval','representante'}
+ROLES={'solicitante','contacto','aval','representante','accionista'}
 DOC_ROLES={'Solicitante','Aval','RepresentanteLegal','Accionista'}
 TYPES={'text','email','phone','url','select'}
 CODE=re.compile(r'^[a-z][a-z_]{0,79}$')
@@ -22,7 +23,12 @@ def baseline():
 
 def active(conn):
     row=conn.execute('SELECT id,body FROM capture_catalogs ORDER BY id DESC LIMIT 1').fetchone()
-    return (row['id'],row['body']) if row and 'body' in row else (0,baseline())
+    if row and 'body' in row:
+        config=copy.deepcopy(row['body'])
+        if not any(r['role']=='accionista' for r in config['fields']):
+            config['fields'].extend(r for r in baseline()['fields'] if r['role']=='accionista')
+        return row['id'],config
+    return 0,baseline()
 
 def snapshot(conn,intake_id):
     row=conn.execute('SELECT catalog_snapshot FROM intakes WHERE id=%s',(intake_id,)).fetchone()
@@ -31,7 +37,11 @@ def snapshot(conn,intake_id):
 def field_rows(person,subject=None):
     config=person.get('catalog')
     if config is None:return None
-    return sorted([r for r in config['fields'] if r['role']==person['role'] and r['subject_type']==(subject or person['subject_type']) and r['enabled']],key=lambda r:(r['order'],r['code']))
+    rows=config['fields']
+    # Existing intake snapshots acquire defaults only for an explicitly added new role.
+    if person['role']=='accionista' and not any(r['role']=='accionista' for r in rows):
+        rows=baseline()['fields']
+    return sorted([r for r in rows if r['role']==person['role'] and r['subject_type']==(subject or person['subject_type']) and r['enabled']],key=lambda r:(r['order'],r['code']))
 
 def fields_for(person,subject=None):
     rows=field_rows(person,subject)
@@ -50,6 +60,10 @@ def reuse_source(person,code):
     return next((r['reuse_from'] for r in rows or [] if r['code']==code),'') if rows is not None else ('razon_social' if code=='nombre_comercial' else '')
 
 def validate_value(person,code,value):
+    if person['role']=='accionista':
+        if code=='porcentaje_participacion':shareholders.percentage(value)
+        if code=='curp' and not shareholders.CURP.fullmatch(value.upper()):
+            raise ValueError('Revisa el formato de la CURP (18 caracteres)')
     row=next((r for r in field_rows(person) or [] if r['code']==code),None)
     if row and row['type']=='select' and value.casefold() not in {s.casefold() for s in row['options']}:
         raise ValueError('Selecciona una de las opciones permitidas')
@@ -86,6 +100,10 @@ def validate(config):
         source=raw.get('reuse_from','') or ''
         if source and (not isinstance(source,str) or not CODE.fullmatch(source) or source==code):raise ValueError('Origen de reutilización inválido')
         result['fields'].append({'role':role,'subject_type':subject,'code':code,'label':text(raw.get('label'),'nombre',120),'question':text(raw.get('question'),'pregunta'),'type':kind,'order':order(raw.get('order')),'enabled':boolean(raw.get('enabled',True),'enabled'),'options':options,'reuse_from':source})
+    for subject,required in [('PF',{'nombre','curp','porcentaje_participacion'}),('PM',{'razon_social','porcentaje_participacion'})]:
+        configured=[r for r in result['fields'] if r['role']=='accionista' and r['subject_type']==subject]
+        if any(r['role']=='accionista' for r in result['fields']) and not required <= {r['code'] for r in configured if r['enabled']}:
+            raise ValueError('Accionista '+subject+' requiere identidad y porcentaje de participación activos')
     for row in result['fields']:
         if row['enabled'] and row['reuse_from'] and not any(r['role']==row['role'] and r['subject_type']==row['subject_type'] and r['code']==row['reuse_from'] and r['enabled'] and r['type']==row['type'] for r in result['fields']):raise ValueError('El origen de reutilización debe ser un campo activo del mismo rol, tipo de persona y tipo de dato')
     seen=set()

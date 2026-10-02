@@ -10,14 +10,16 @@ from uuid import uuid4
 from .rules import FIELDS, masked_name, normalized_rfc
 from .catalog import fields_for, field_rows, question_for, reuse_source, validate_value
 from .memory import model_memory, relations_from_actions, identity_members
+from . import shareholders
 
 MAX_ACTIONS = 16
-COMMON_FIELDS = {'nombre', 'correo_contacto', 'telefono', 'rfc'}
+COMMON_FIELDS = {'nombre', 'correo_contacto', 'telefono', 'rfc', 'curp'}
 ORDER = {
     'solicitante': ['razon_social', 'nombre', 'nombre_comercial', 'actividad', 'pagina_web', 'correo_contacto', 'telefono'],
     'contacto': ['nombre', 'correo_contacto', 'telefono'],
     'aval': ['rfc', 'razon_social', 'nombre', 'ocupacion', 'pagina_web', 'correo_contacto', 'telefono'],
     'representante': ['rfc', 'nombre', 'cargo', 'correo_contacto', 'telefono'],
+    'accionista': ['rfc','nombre','razon_social','curp','porcentaje_participacion'],
 }
 QUESTIONS = {
     'rfc': '¿Cuál es su RFC?', 'nombre': '¿Cuál es su nombre completo?',
@@ -25,6 +27,8 @@ QUESTIONS = {
     'actividad': '¿A qué se dedica?', 'pagina_web': '¿Cuál es su página web?',
     'correo_contacto': '¿Cuál es el correo de contacto?', 'telefono': '¿Cuál es el teléfono?',
     'ocupacion': '¿Cuál es su ocupación?', 'cargo': '¿Cuál es su cargo?',
+    'curp': '¿Cuál es su CURP?',
+    'porcentaje_participacion': '¿Cuál es su porcentaje de participación en la empresa? Debe ser mayor al 10%.',
 }
 
 
@@ -38,15 +42,23 @@ class InvalidProposal(ValueError):
 
 def missing(person):
     fields = fields_for(person)
-    if person['role'] in ('aval', 'representante') and not person.get('rfc'):
+    if person['role'] in ('aval', 'representante', 'accionista') and not person.get('rfc'):
         fields.add('rfc')
     rows=field_rows(person)
-    order=((['rfc'] if person['role'] in ('aval','representante') else [])+[r['code'] for r in rows]) if rows is not None else ORDER[person['role']]
+    order=((['rfc'] if person['role'] in ('aval','representante','accionista') else [])+[r['code'] for r in rows]) if rows is not None else ORDER[person['role']]
     return [f for f in order if f in fields and not (
         person.get('rfc') if f == 'rfc' else person['answers'].get(f))]
 
 
 def active_person(people, preferred=None):
+    company=shareholders.applicant(people)
+    if company and company.get('shareholders_enabled'):
+        for roles in [('solicitante','contacto'),('representante',),('accionista',),('aval',)]:
+            if roles==('representante',) and company['subject_type']=='PM' and not any(p['role']=='representante' for p in people.values()):return None
+            if roles==('aval',) and shareholders.needs_completion(people):return None
+            pending=[pid for pid,p in people.items() if p['role'] in roles and missing(p)]
+            if pending:return preferred if preferred in pending else pending[0]
+        return None
     if preferred in people and missing(people[preferred]):
         return preferred
     return next((pid for pid, p in people.items() if missing(p)), None)
@@ -90,7 +102,7 @@ def context_for_turn(people, preferred, history, shown_question=None, session_em
             if source_id == active:
                 continue
             known = bool(source.get('rfc')) if field == 'rfc' else bool(source['answers'].get(field))
-            compatible = not (field == 'nombre' and source['subject_type'] != 'PF')
+            compatible = not (field in ('nombre','curp') and source['subject_type'] != 'PF')
             if field == 'rfc' and target['role'] == 'representante':
                 compatible = source['subject_type'] == 'PF'
             if known and compatible:
@@ -179,7 +191,7 @@ def identity_reference(message):
         return None
     text=' '.join(message.casefold().strip(' .!').split())
     text=re.sub(r'^soy yo[,; ]+', '', text)
-    roles=r'(?:solicitante|contacto|aval|representante(?: legal)?)'
+    roles=r'(?:solicitante|contacto|aval|accionista|representante(?: legal)?)'
     create=re.match(r'(?:(?:quiero|vamos a) )?(?:agrega|agregar|añade|añadir) '
                     r'(?:(?:al|a la|un|una|otro|otra|el|la) )?('+roles+r')[,;:]?\s*',text)
     created_role=create.group(1).replace(' legal','') if create else None
@@ -270,7 +282,7 @@ def local_reference(people,message,preferred,history,relations=None):
             return {'reply':'Ese participante ya está registrado. Indica el otro rol que deseas completar.','actions':[]}
         actions=[]
         if target_id is None:
-            if role not in ('aval','representante'):
+            if role not in ('aval','representante','accionista'):
                 return None
             target_id='new'
             person={'role':role,'subject_type':'PF','rfc':None,'answers':{}}
@@ -281,14 +293,14 @@ def local_reference(people,message,preferred,history,relations=None):
             person=people[target_id]
         if person['subject_type']!='PF':
             return {'reply':'El participante de destino es una persona moral; no podemos reutilizar una identidad PF para ese rol.','actions':[]}
-        shared=('rfc','nombre','correo_contacto','telefono')
+        shared=('rfc','nombre','correo_contacto','telefono','curp')
         def value(p,f):return p.get('rfc') if f=='rfc' else p['answers'].get(f)
         target_group=identity_members(people,relations or [],target_id) if target_id in people else set()
         group=source_group | target_group
         if any(len({value(people[pid],f) for pid in group if value(people[pid],f)} |
                    ({value(person,f)} if value(person,f) else set()))>1 for f in shared):
             return {'reply':'Los datos capturados entran en conflicto. Confirma la corrección con nuestro equipo antes de reutilizarlos.','actions':[]}
-        allowed=fields_for(person) | ({'rfc'} if role in ('aval','representante') else set())
+        allowed=fields_for(person) | ({'rfc'} if role in ('aval','representante','accionista') else set())
         for f in shared:
             if f not in allowed or value(person,f):continue
             origins=[pid for pid in people if pid in source_group and value(people[pid],f)]
@@ -300,7 +312,8 @@ def local_reference(people,message,preferred,history,relations=None):
             actions=[{'type':'focus_participant','target_id':target_id,'source_id':None,
                       'role':None,'field':None,'value':None,'evidence':message}]
         return {'reply':'Usaré los datos disponibles de la misma persona.','actions':actions}
-    if not active:return None
+    if not active:
+        return shareholders.local_proposal(people,message,active,missing,capture_stage(people,preferred))
     person=people[active]
     field=missing(person)[0]
     if field in COMMON_FIELDS and re.fullmatch(r'(?:es |son )?(?:el |la |los )?(?:mismo|misma|mismos|igual)',message.strip(' .!'),re.I):
@@ -324,7 +337,7 @@ def local_reference(people,message,preferred,history,relations=None):
             return {'reply':'Usaré el dato ya registrado.','actions':[{'type':'reuse_field','target_id':active,'source_id':active,'role':None,'field':field,'value':None,'evidence':message}]}
     if re.fullmatch(r'(?:ok[, ]*)?(?:continuemos|contin[uú]a|seguir|adelante)',message.strip(),re.I):
         return {'reply':resume_reply(people,preferred),'actions':[]}
-    return None
+    return shareholders.local_proposal(people,message,active,missing,capture_stage(people,preferred))
 
 
 def capture_progress(people):
@@ -339,7 +352,11 @@ def resume_reply(people, preferred=None):
         applicant = next((p for p in people.values() if p['role']=='solicitante'),None)
         if applicant:
             if applicant['subject_type']=='PM' and not any(p['role']=='representante' for p in people.values()):
-                return 'Los datos están guardados. Para continuar, agrega al representante legal de la empresa. También puedes agregar un aval.'
+                return 'Los datos están guardados. Para continuar, agrega al representante legal de la empresa.'
+            if shareholders.needs_completion(people):
+                return 'Ahora registraremos los principales accionistas con más del 10% de participación. Escribe «accionista» para agregar uno. Al terminar escribe «listo accionistas»; si no hay ninguno, escribe «no hay accionistas con más del 10%».'
+            if applicant.get('shareholders_enabled') and not applicant.get('guarantors_complete'):
+                return 'Ahora puedes agregar los avales de la solicitud. Escribe «aval» para agregar uno. Al terminar escribe «listo avales»; si no agregarás ninguno, escribe «sin aval».'
             return 'Los datos están guardados. Continuemos con los documentos de esta solicitud.'
         return 'Este avance está guardado. Puedes agregar un aval o representante, o regresar después.'
     person = people[active]
@@ -352,6 +369,8 @@ def capture_stage(people, preferred=None):
         return 'capture'
     if applicant['subject_type']=='PM' and not any(p['role']=='representante' for p in people.values()):
         return 'capture'
+    if shareholders.needs_completion(people):return 'shareholders'
+    if applicant.get('shareholders_enabled') and not applicant.get('guarantors_complete'):return 'guarantors'
     return 'documents'
 
 
@@ -409,6 +428,18 @@ def apply_proposal(people, proposal, message, preferred=None, session_email=None
         if not isinstance(evidence, str) or not evidence.strip() or evidence.casefold() not in message.casefold():
             raise InvalidProposal('El cambio no está respaldado por tu mensaje')
         kind = action['type']
+        if kind in ('finish_shareholders','finish_guarantors'):
+            company=shareholders.applicant(result)
+            if (any(action[k] is not None for k in ('source_id','role','field','value')) or not company or
+                action['target_id']!=company['id'] or active_person(result,preferred_id) or
+                capture_stage(result,preferred_id)!=('shareholders' if kind=='finish_shareholders' else 'guarantors')):
+                raise InvalidProposal('Completa los datos antes de cerrar la lista de participantes')
+            expected=shareholders.local_proposal(result,message,None,missing,capture_stage(result,preferred_id))
+            if not expected or not any(a['type']==kind for a in expected['actions']):
+                raise InvalidProposal('Confirma expresamente el cierre de la lista de participantes')
+            company['shareholders_complete' if kind=='finish_shareholders' else 'guarantors_complete']=True
+            audit.append({'type':kind,'target_id':company['id'],'evidence':evidence})
+            continue
         if kind == 'focus_participant':
             if action['target_id'] not in people or any(action[k] is not None for k in ('source_id','role','field','value')):
                 raise InvalidProposal('El participante no pertenece a esta solicitud')
@@ -417,7 +448,7 @@ def apply_proposal(people, proposal, message, preferred=None, session_email=None
             continue
         if kind == 'add_participant':
             role = action['role']
-            if role not in ('aval', 'representante') or role not in message.casefold() or new_id:
+            if role not in ('aval', 'representante','accionista') or role not in message.casefold() or new_id:
                 raise InvalidProposal('Revisa qué participante deseas agregar')
             if action['target_id'] != 'new' or any(action[k] is not None for k in ('source_id', 'field', 'value')):
                 raise InvalidProposal('Acción no reconocida')
@@ -425,6 +456,12 @@ def apply_proposal(people, proposal, message, preferred=None, session_email=None
                 raise InvalidProposal('Máximo tres avales')
             new_id = str(uuid4())
             result[new_id] = {'id': new_id, 'role': role, 'subject_type': 'PF', 'rfc': None, 'answers': {}}
+            if role=='aval' and shareholders.applicant(result):shareholders.applicant(result)['guarantors_complete']=False
+            if role=='accionista':
+                company=shareholders.applicant(result)
+                if not company or company['subject_type']!='PM':raise InvalidProposal('Solo se agregan accionistas a una empresa solicitante')
+                company['shareholders_enabled']=True;company['shareholders_complete']=False
+                result[new_id]['company_id']=company['id']
             if people and next(iter(people.values())).get('catalog') is not None:result[new_id]['catalog']=next(iter(people.values()))['catalog']
             audit.append({'type': kind, 'target_id': new_id, 'role': role, 'evidence': evidence})
             preferred_id = new_id
@@ -451,7 +488,7 @@ def apply_proposal(people, proposal, message, preferred=None, session_email=None
                     raise InvalidProposal('El origen no pertenece a esta solicitud')
                 source = result[source_id]
                 # Explicitly shared contact channels do not imply the same identity.
-                if field == 'nombre' and source['subject_type'] != 'PF':
+                if field in ('nombre','curp') and source['subject_type'] != 'PF':
                     raise InvalidProposal('La razón social no es el nombre de una persona')
                 value = source.get('rfc') if field == 'rfc' else source['answers'].get(alias if self_name else field)
             if not value:
@@ -465,7 +502,7 @@ def apply_proposal(people, proposal, message, preferred=None, session_email=None
             value = value.strip()
             source_id = None
         if field == 'rfc':
-            if target['role'] not in ('aval', 'representante'):
+            if target['role'] not in ('aval', 'representante','accionista'):
                 raise InvalidProposal('El RFC de este participante no se puede cambiar aquí')
             try:
                 value, subject = normalized_rfc(value)
@@ -498,6 +535,8 @@ def apply_proposal(people, proposal, message, preferred=None, session_email=None
         for pid, p in result.items() if pid != new_id
     ):
         raise InvalidProposal('Ese participante ya está capturado; utiliza sus datos existentes')
+    try:shareholders.validate_people(result)
+    except ValueError as exc:raise InvalidProposal(str(exc))
     return result, audit, active_person(result, preferred_id)
 
 

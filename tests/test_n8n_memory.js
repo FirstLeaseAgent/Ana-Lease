@@ -20,3 +20,10 @@ assert.equal(transmitted.history.length,4);
 assert.equal(prepared.request.store,false);
 assert.equal(prepared.request.text.format.strict,true);
 console.log('Existing n8n workflow transmits durable memory without changing its contract');
+body.context.participants=[{id:'share-test',role:'accionista',subject_type:'PF',known_fields:['rfc','nombre'],missing_fields:['curp','porcentaje_participacion']}];
+const withShareholder=vm.runInNewContext('(function(){'+prepare+'\n})()',{
+  $input:{first:()=>({json:{body,instructions:'Instrucciones de prueba'}})},
+})[0].json;
+assert.equal(withShareholder.ok,true);
+assert.equal(JSON.parse(withShareholder.request.input[0].content[0].text).context.participants[0].role,'accionista');
+console.log('Existing n8n workflow accepts the new shareholder in conversation context');

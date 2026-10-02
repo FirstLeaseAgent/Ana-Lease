@@ -40,7 +40,7 @@ def relations_from_actions(people, actions, session_email=None):
             if source_id not in people or source_id==target_id:
                 continue
             source=people[source_id]
-            shared=('nombre','correo_contacto','telefono')
+            shared=('nombre','correo_contacto','telefono','curp')
             if target['subject_type']!='PF' or source['subject_type']!='PF':
                 continue
             matching_name=bool(value_for(source,'nombre') and value_for(target,'nombre')==value_for(source,'nombre'))
