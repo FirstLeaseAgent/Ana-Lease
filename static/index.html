@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>First Lease · AnaLease</title><link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main>
+    <header><div class="brand-row"><img class="brand-logo" src="/firstlease-logo.png" alt="First Lease"><div class="portal-brand"><span class="ana-avatar" aria-hidden="true">A</span><div><strong>AnaLease</strong><p>Tu solicitud, paso a paso</p></div></div></div><div class="header-actions"><button id="copy-conversation" class="secondary" type="button">Copiar conversación</button><button id="undo-answer" class="secondary" type="button">Deshacer última respuesta</button></div></header>
+    <section id="capture-progress" hidden aria-label="Avance de la captura"><div class="progress-label"><span id="capture-progress-label">Captura de datos</span><span id="capture-progress-count"></span></div><progress id="capture-progress-bar" max="100" value="0"></progress><p id="capture-stage-label"></p></section>
+    <section id="conversation" aria-live="polite"></section>
+    <section id="documents" hidden aria-label="Documentos de la solicitud"></section>
+    <form id="composer"><label id="prompt" for="answer">Tu respuesta</label><div class="line"><input id="answer" autocomplete="off" required><button>Continuar</button></div></form>
+    <p id="notice" role="status"></p>
+  </main>
+  <script src="/app.js" defer></script>
+  <script src="/documents.js" defer></script>
+</body>
+</html>

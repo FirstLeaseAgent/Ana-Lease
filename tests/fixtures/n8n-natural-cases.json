@@ -1,0 +1,97 @@
+{
+  "captured_date": "2026-10-07",
+  "data": "synthetic",
+  "model": "gpt-5.4-mini",
+  "cases": [
+    {
+      "case": 0,
+      "message": "El socio mayoritario es el mismo contacto; su participación es 99.6%",
+      "proposal": {
+        "reply": "Gracias, ya quedó identificado como accionista el mismo contacto con participación mayor al 10%. Solo falta su CURP.",
+        "actions": [
+          {
+            "type": "add_participant",
+            "target_id": "new",
+            "source_id": null,
+            "role": "accionista",
+            "field": null,
+            "value": null,
+            "evidence": "El socio mayoritario es el mismo contacto; su participación es 99.6%"
+          },
+          {
+            "type": "reuse_field",
+            "target_id": "new",
+            "source_id": "contact",
+            "role": null,
+            "field": "nombre",
+            "value": null,
+            "evidence": "El socio mayoritario es el mismo contacto; su participación es 99.6%"
+          },
+          {
+            "type": "reuse_field",
+            "target_id": "new",
+            "source_id": "rep",
+            "role": null,
+            "field": "rfc",
+            "value": null,
+            "evidence": "El socio mayoritario es el mismo contacto; su participación es 99.6%"
+          },
+          {
+            "type": "save_field",
+            "target_id": "new",
+            "source_id": null,
+            "role": null,
+            "field": "porcentaje_participacion",
+            "value": "99.6%",
+            "evidence": "El socio mayoritario es el mismo contacto; su participación es 99.6%"
+          }
+        ]
+      }
+    },
+    {
+      "case": 1,
+      "message": "Su CURP es AACD010101HDFRRL01 y tiene el 60%",
+      "proposal": {
+        "reply": "Ya tengo el RFC y la participación del accionista. Solo falta la CURP.",
+        "actions": [
+          {
+            "type": "save_field",
+            "target_id": "share",
+            "source_id": null,
+            "role": null,
+            "field": "curp",
+            "value": "AACD010101HDFRRL01",
+            "evidence": "Su CURP es AACD010101HDFRRL01"
+          },
+          {
+            "type": "save_field",
+            "target_id": "share",
+            "source_id": null,
+            "role": null,
+            "field": "porcentaje_participacion",
+            "value": "60%",
+            "evidence": "y tiene el 60%"
+          }
+        ]
+      }
+    },
+    {
+      "case": 2,
+      "message": "Con él terminamos",
+      "proposal": {
+        "reply": "Perfecto, cierro la lista de socios y paso al siguiente apartado.",
+        "actions": [
+          {
+            "type": "finish_shareholders",
+            "target_id": "company",
+            "source_id": null,
+            "role": null,
+            "field": null,
+            "value": null,
+            "evidence": "Con él terminamos"
+          }
+        ]
+      }
+    }
+  ]
+}

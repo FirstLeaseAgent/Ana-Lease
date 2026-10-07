@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "message": "Quiero agregar un representante; es el mismo contacto",
+  "context": {
+    "version": 1,
+    "active_participant_id": null,
+    "participants": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "role": "solicitante",
+        "subject_type": "PM",
+        "hint": "Solicitante (PM) · E****** D* P*****",
+        "known_fields": ["rfc", "razon_social", "nombre_comercial", "actividad", "pagina_web", "correo_contacto", "telefono"],
+        "missing_fields": []
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000000002",
+        "role": "contacto",
+        "subject_type": "PF",
+        "hint": "Contacto (PF) · P****** D* P*****",
+        "known_fields": ["nombre", "correo_contacto", "telefono"],
+        "missing_fields": []
+      }
+    ]
+  },
+  "history": []
+}
