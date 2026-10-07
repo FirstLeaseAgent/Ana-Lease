@@ -11,6 +11,7 @@ from .rules import FIELDS, masked_name, normalized_rfc
 from .catalog import fields_for, field_rows, question_for, reuse_source, validate_value
 from .memory import model_memory, relations_from_actions, identity_members
 from . import shareholders
+from . import handoffs
 
 MAX_ACTIONS = 16
 COMMON_FIELDS = {'nombre', 'correo_contacto', 'telefono', 'rfc', 'curp'}
@@ -224,9 +225,45 @@ def source_for_reference(people, reference):
     return candidates[0] if len(candidates)==1 else None
 
 
+def pending_representative(people,preferred=None):
+    company=shareholders.applicant(people)
+    return bool(company and company['subject_type']=='PM' and not active_person(people,preferred)
+                and not any(p['role']=='representante' for p in people.values()))
+
+
+def named_representative_reference(people,message,relations=None):
+    matches=handoffs.matching_names(people,message)
+    if not matches:return None
+    first=matches[0]
+    if any(pid not in identity_members(people,relations or [],first) for pid in matches):
+        return {'ambiguous':True}
+    source=people[first];ids=[pid for pid,p in people.items() if p['role']==source['role']]
+    return {'target_role':'representante','target_index':None,'source_role':source['role'],
+            'source_index':str(ids.index(first)+1),'create':True}
+
+
+def implicit_representative_input(people,message):
+    if not pending_representative(people):return False
+    reference=identity_reference(message)
+    if reference and reference['target_role'] is None:
+        source=source_for_reference(people,reference)
+        return bool(source and people[source]['subject_type']=='PF')
+    return bool(handoffs.matching_names(people,message) or handoffs.literal_name(message) or handoffs.pf_rfc(message))
+
+
 def identity_audit(people, audit, message):
     """Persist an explicit identity statement only after validated data reuse."""
     reference=identity_reference(message)
+    if not reference:
+        # The question asks who will act as representative; an exact stored full name
+        # identifies that source, without changing the scope of later name answers.
+        matches=handoffs.matching_names(people,message)
+        reused={a.get('source_id') for a in audit if a.get('type')=='reuse_field' and a.get('field')=='nombre'
+                and a.get('target_id') in people and people[a['target_id']]['role']=='representante'}
+        sources=[pid for pid in matches if pid in reused]
+        if len(sources)==1:
+            source=sources[0];ids=[pid for pid,p in people.items() if p['role']==people[source]['role']]
+            reference={'target_role':'representante','source_role':people[source]['role'],'source_index':str(ids.index(source)+1)}
     if not reference:
         return []
     source=source_for_reference(people,reference)
@@ -249,6 +286,13 @@ def identity_audit(people, audit, message):
 def local_reference(people,message,preferred,history,relations=None):
     active=active_person(people,preferred)
     reference=identity_reference(message)
+    pending=pending_representative(people,preferred)
+    if pending and not reference:
+        reference=named_representative_reference(people,message,relations)
+        if reference and reference.get('ambiguous'):
+            return {'reply':'Ese nombre coincide con más de un participante. Indica el rol de origen, por ejemplo «es el mismo contacto».','actions':[]}
+    if pending and reference and reference['target_role'] is None:
+        reference=dict(reference,target_role='representante',create=True)
     if reference:
         source_id=source_for_reference(people,reference)
         if not source_id:
@@ -313,9 +357,22 @@ def local_reference(people,message,preferred,history,relations=None):
                       'role':None,'field':None,'value':None,'evidence':message}]
         return {'reply':'Usaré los datos disponibles de la misma persona.','actions':actions}
     if not active:
+        if pending:
+            if handoffs.literal_name(message) or handoffs.pf_rfc(message):
+                field='rfc' if handoffs.pf_rfc(message) else 'nombre'
+                return {'reply':'Vamos a completar al representante legal.','actions':[
+                    shareholders.action('add_participant',role='representante',message=message),
+                    shareholders.action('save_field',field=field,value=message.strip(),message=message)]}
+            if message.strip(' .!').casefold() in ('ok','sí','si','listo','continuemos','adelante','representante','representante legal'):
+                if message.strip(' .!').casefold().startswith('representante'):
+                    return {'reply':'Vamos a completar al representante legal.','actions':[
+                        shareholders.action('add_participant',role='representante',message=message)]}
+                return {'reply':resume_reply(people,preferred),'actions':[]}
         return shareholders.local_proposal(people,message,active,missing,capture_stage(people,preferred))
     person=people[active]
     field=missing(person)[0]
+    channel=handoffs.channel_reference(people,relations,history,active,field,message)
+    if channel:return channel
     if field in COMMON_FIELDS and re.fullmatch(r'(?:es |son )?(?:el |la |los )?(?:mismo|misma|mismos|igual)',message.strip(' .!'),re.I):
         linked=identity_members(people,relations or [],active)
         candidates=[pid for pid in people if pid in linked and pid!=active and
@@ -352,7 +409,7 @@ def resume_reply(people, preferred=None):
         applicant = next((p for p in people.values() if p['role']=='solicitante'),None)
         if applicant:
             if applicant['subject_type']=='PM' and not any(p['role']=='representante' for p in people.values()):
-                return 'Los datos están guardados. Para continuar, agrega al representante legal de la empresa.'
+                return 'Los datos están guardados. ¿Quién es el representante legal de la empresa? Escribe su nombre completo o «es el mismo contacto».'
             if shareholders.needs_completion(people):
                 return 'Ahora registraremos los principales accionistas con más del 10% de participación. Escribe «accionista» para agregar uno. Al terminar escribe «listo accionistas»; si no hay ninguno, escribe «no hay accionistas con más del 10%».'
             if applicant.get('shareholders_enabled') and not applicant.get('guarantors_complete'):
@@ -448,7 +505,8 @@ def apply_proposal(people, proposal, message, preferred=None, session_email=None
             continue
         if kind == 'add_participant':
             role = action['role']
-            if role not in ('aval', 'representante','accionista') or role not in message.casefold() or new_id:
+            implied=role=='representante' and implicit_representative_input(people,message)
+            if role not in ('aval', 'representante','accionista') or (role not in message.casefold() and not implied) or new_id:
                 raise InvalidProposal('Revisa qué participante deseas agregar')
             if action['target_id'] != 'new' or any(action[k] is not None for k in ('source_id', 'field', 'value')):
                 raise InvalidProposal('Acción no reconocida')
