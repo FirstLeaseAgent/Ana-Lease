@@ -24,11 +24,12 @@ def complete_people():
         str(AVAL):{'id':str(AVAL),'role':'aval','subject_type':'PF','rfc':'ABCD010101AB1','answers':{'nombre':'Nombre de prueba','ocupacion':'Socio','correo_contacto':'prueba@example.test','telefono':'5551234567'}}}
 
 class FakeConn:
-    def __init__(self):self.calls=[];self.query='';self.states=[];self.previous=None;self.source_upload=None
+    def __init__(self):self.calls=[];self.query='';self.states=[];self.previous=None;self.source_upload=None;self.processing=False
     def transaction(self):return nullcontext()
     def execute(self,query,params=()):self.query=query;self.calls.append((query,params));return self
     def fetchall(self):return self.states if 'FROM document_states' in self.query else []
     def fetchone(self):
+        if "status='processing'" in self.query:return {'processing':True} if self.processing else None
         if 'FROM document_uploads WHERE id=' in self.query:return self.previous
         if 'JOIN document_uploads' in self.query:return self.source_upload
         return {'n':0} if 'count(*)' in self.query else None
@@ -240,13 +241,40 @@ class DocumentTests(unittest.TestCase):
         self.assertEqual(error.exception.status_code,503)
         self.assertFalse(any(q.startswith('INSERT INTO document_states') for q,_ in conn.calls))
 
-    def test_finalize_blocks_missing_and_unknown_conditional_documents(self):
+    def test_finalize_accepts_missing_and_unknown_conditions_and_records_followup(self):
         routes,conn=self.routes()
+        out=routes['/intakes/{intake_id}/finalize'](INTAKE,None)
+        self.assertEqual(out['status'],'submitted')
+        details=next(params[5].obj for q,params in conn.calls if q.startswith('INSERT INTO document_events') and params[4]=='finalize')
+        self.assertEqual(details['required_missing'],3)
+        self.assertEqual(len(details['pending_documents']),3)
+        self.assertEqual({d['code'] for d in details['pending_documents']},{'documento_empresa','documento_persona','documento_condicional'})
+        self.assertIs(next(d for d in details['pending_documents'] if d['code']=='documento_condicional')['applicable'],None)
+        self.assertFalse(any(q.startswith('INSERT INTO document_states') for q,_ in conn.calls))
+        conn=FakeConn();conn.states=[{'participant_id':UUID(row['participant_id']),'document_code':row['code'],'status':'received'} for row in d.requirements(self.people)]
+        routes,_=self.routes(conn)
+        self.assertEqual(routes['/intakes/{intake_id}/finalize'](INTAKE,None)['status'],'submitted')
+        details=next(params[5].obj for q,params in conn.calls if q.startswith('INSERT INTO document_events') and params[4]=='finalize')
+        self.assertEqual(details['required_missing'],1)
+        self.assertEqual(details['pending_documents'][0]['code'],'documento_condicional')
+
+    def test_submitted_checklist_keeps_missing_documents_visible(self):
+        routes,_=self.routes(authorize=lambda *args,**kwargs:{'status':'submitted'})
+        out=routes['/intakes/{intake_id}/documents'](INTAKE,None)
+        self.assertEqual(out['required_missing'],3)
+        self.assertIn('documentos pendientes',out['message'])
+        self.assertEqual(next(r for r in out['documents'] if r['code']=='documento_persona')['status'],'pending')
+
+    def test_finalize_still_waits_for_inflight_storage_and_capture(self):
+        conn=FakeConn();conn.processing=True
+        routes,_=self.routes(conn)
         with self.assertRaises(HTTPException) as error:routes['/intakes/{intake_id}/finalize'](INTAKE,None)
         self.assertEqual(error.exception.status_code,409)
         self.assertFalse(any("status='submitted'" in q for q,_ in conn.calls))
-        conn.states=[{'participant_id':UUID(row['participant_id']),'document_code':row['code'],'status':'received'} for row in d.requirements(self.people)]
+        people=copy.deepcopy(self.people);people[str(REP)]['answers'].pop('cargo')
+        routes,conn=self.routes(people=people)
         with self.assertRaises(HTTPException):routes['/intakes/{intake_id}/finalize'](INTAKE,None)
+        self.assertFalse(any("status='submitted'" in q for q,_ in conn.calls))
 
     def test_finalize_accepts_complete_required_documents_and_audits_once(self):
         people=copy.deepcopy(self.people);people[str(AVAL)]['answers']['estado_civil']='Soltero'

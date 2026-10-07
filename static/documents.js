@@ -18,7 +18,7 @@ async function loadDocuments(){
   documentPanel.append(docElement('h2','Documentos'),docElement('p',result.message));
   const submitted=result.status==='submitted';
   const required=result.documents.filter(r=>r.required&&r.applicable!==false).length;
-  setCaptureProgress(submitted?'Solicitud finalizada':'Documentos obligatorios',submitted?1:Math.max(0,required-result.required_missing),submitted?1:required,submitted?'Finalizada · pendiente de revisión':'Datos completos → Documentos → Finalización');
+  setCaptureProgress(submitted?'Solicitud recibida · documentos':'Documentos obligatorios',Math.max(0,required-result.required_missing),required,submitted?'Recibida · pendiente de revisión':'Datos completos → Documentos → Finalización');
   if(submitted){state.step='submitted';form.hidden=true;documentPanel.className='documents-complete';}else documentPanel.className='';
   if(!submitted&&!result.upload_available)documentPanel.append(docElement('p','La carga de archivos estará disponible en breve. Puedes revisar la lista y dejar pendientes.'));
   const options=docElement('div');options.className='document-actions';
@@ -74,9 +74,9 @@ async function loadDocuments(){
     documentPanel.append(card);
   }
   if(!submitted){
-    documentPanel.append(docElement('p',result.required_missing?'Pendientes obligatorios: '+result.required_missing+'. Tu avance está guardado; puedes regresar después.':'Los documentos obligatorios están recibidos. Los opcionales no impiden finalizar.'));
-    documentPanel.append(docElement('p','Al finalizar se cerrará la captura. Los documentos quedan pendientes de revisión; la solicitud todavía no está aprobada.'));
+    documentPanel.append(docElement('p',result.required_missing?'Documentos requeridos pendientes: '+result.required_missing+'. Puedes finalizar ahora; el equipo podrá dar seguimiento a los faltantes.':'Los documentos obligatorios están recibidos. Los opcionales no impiden finalizar.'));
+    documentPanel.append(docElement('p','Al finalizar se enviará la solicitud a revisión y se cerrará la captura. Los documentos faltantes seguirán pendientes; la solicitud todavía no está aprobada.'));
     const finish=docButton('Finalizar solicitud',async()=>{await api('/intakes/'+state.intake+'/finalize','POST',{});await loadDocuments();});
-    finish.disabled=result.required_missing>0;documentPanel.append(finish);
+    documentPanel.append(finish);
   }
 }

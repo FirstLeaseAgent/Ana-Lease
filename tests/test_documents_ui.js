@@ -22,7 +22,7 @@ const flatten=node=>[node,...node.children.flatMap(child=>typeof child==='object
  let all=flatten(nodes['#documents']);
  assert.equal(all.filter(n=>n.type==='file').length,1);
  assert.ok(all.some(n=>n.textContent.includes('Un solo archivo cubre estos roles')&&n.textContent.includes('Representante (PF), Aval (PF)')));
- assert.equal(all.find(n=>n.textContent==='Subir archivo').disabled,true);assert.equal(all.find(n=>n.textContent==='Finalizar solicitud').disabled,true);
+ assert.equal(all.find(n=>n.textContent==='Subir archivo').disabled,true);assert.equal(all.find(n=>n.textContent==='Finalizar solicitud').disabled,false);
  const defer=all.find(n=>n.textContent==='No lo tengo ahora');await defer.handlers.click();
  assert.ok(calls.some(c=>c.path.endsWith('/documento_empresa/defer')&&c.options.method==='POST'));
  uploadAvailable=true;await vm.runInContext('loadDocuments()',browser);
@@ -35,9 +35,10 @@ const flatten=node=>[node,...node.children.flatMap(child=>typeof child==='object
  all=flatten(nodes['#documents']);await all.find(n=>n.textContent==='Agregar otro aval').handlers.click();
  assert.equal(vm.runInContext('state.step',browser),'conversation');assert.equal(nodes['#documents'].hidden,true);
  const capture=calls.find(c=>c.path.endsWith('/conversation'));assert.equal(JSON.parse(capture.options.body).message,'Quiero agregar un aval');
- requiredMissing=0;await vm.runInContext('loadDocuments()',browser);
+ requiredMissing=1;await vm.runInContext('loadDocuments()',browser);
  all=flatten(nodes['#documents']);const finish=all.find(n=>n.textContent==='Finalizar solicitud');assert.equal(finish.disabled,false);await finish.handlers.click();
  all=flatten(nodes['#documents']);assert.equal(vm.runInContext('state.step',browser),'submitted');assert.equal(all.some(n=>n.type==='file'||n.textContent==='Finalizar solicitud'||n.textContent==='Agregar otro aval'),false);
  assert.ok(calls.some(c=>c.path.endsWith('/finalize')&&c.options.method==='POST'));
+ assert.ok(all.some(n=>n.textContent==='Pendiente'));
  console.log('Document UI gates uploads, saves deferrals, sends files and returns to participant capture');
 })().catch(error=>{console.error(error);process.exitCode=1;});

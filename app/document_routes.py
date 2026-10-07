@@ -65,9 +65,10 @@ def install(app, pool, owner, intake_for_owner, conversation_people, enabled):
         missing=d.required_missing(rows)
         submitted=intake['status']=='submitted'
         return {'documents':rows,'status':intake['status'],'required_missing':missing,'upload_available':not submitted and d.upload_configured(),
-                'message':('Solicitud finalizada. Tus datos y documentos quedaron guardados y pendientes de revisión. Esto no implica aprobación.' if submitted
+                'message':('Solicitud recibida. Tus datos y archivos quedaron guardados. Hay documentos pendientes; el equipo podrá revisarlos y dar seguimiento contigo. Esto no implica aprobación.' if submitted and missing
+                           else 'Solicitud recibida. Tus datos y documentos quedaron guardados y pendientes de revisión. Esto no implica aprobación.' if submitted
                            else 'Los documentos obligatorios están recibidos. Ya puedes finalizar tu solicitud.' if not missing
-                           else 'Continúa con los documentos pendientes. Si no tienes alguno ahora, puedes dejarlo pendiente y regresar después.')}
+                           else 'Puedes finalizar tu solicitud aunque falten documentos. Los pendientes quedarán registrados para el seguimiento del equipo.')}
 
     @app.post('/intakes/{intake_id}/finalize')
     def finalize(intake_id:UUID,request:Request):
@@ -82,7 +83,10 @@ def install(app, pool, owner, intake_for_owner, conversation_people, enabled):
                 states=conn.execute("SELECT participant_id,document_code,status,upload_id FROM document_states WHERE intake_id=%s",(intake_id,)).fetchall()
                 groups=d.grouped_requirements(rows,people,states)
                 missing=d.required_missing(groups)
-                if missing:raise HTTPException(409,f'Faltan {missing} documentos obligatorios o datos que determinan si aplican. Completa los pendientes antes de finalizar.')
+                pending=[{'code':group['code'],'applicable':group['applicable'],
+                          'participants':[m['participant_id'] for m in group['members']]}
+                         for group in groups if group['required'] and group['applicable'] is not False
+                         and (group['applicable'] is not True or group['status']!='received')]
                 # Persist shared coverage for downstream review and audit.
                 for group in groups:
                     if group['status']=='received' and group['upload_id']:
@@ -92,7 +96,8 @@ def install(app, pool, owner, intake_for_owner, conversation_people, enabled):
                                 event(conn,intake_id,user_id,member['participant_id'],member['code'],'reuse',{'upload_id':str(group['upload_id']),'automatic':True})
                 applicant=next(p for p in people.values() if p['role']=='solicitante')
                 conn.execute("UPDATE intakes SET status='submitted',updated_at=now() WHERE id=%s AND owner_id=%s",(intake_id,user_id))
-                event(conn,intake_id,user_id,applicant['id'],None,'finalize',{'recognition_started':False})
+                event(conn,intake_id,user_id,applicant['id'],None,'finalize',{'recognition_started':False,
+                      'required_missing':missing,'pending_documents':pending})
         return {'ok':True,'status':'submitted'}
 
     @app.post('/intakes/{intake_id}/documents/dependency')
