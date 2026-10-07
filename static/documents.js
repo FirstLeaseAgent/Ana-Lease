@@ -29,6 +29,7 @@ async function loadDocuments(){
     if(item.participant_id!==current){documentPanel.append(docElement('h3',item.participant));current=item.participant_id;}
     const card=docElement('article');card.className='document-card';
     card.append(docElement('strong',item.label),docElement('p',item.required?'Obligatorio':'Opcional'));
+    if(item.members?.length>1)card.append(docElement('p','Un solo archivo cubre estos roles de la misma persona: '+item.members.map(m=>m.participant.split(' · ')[0]).join(', ')+'.'));
     const labels={received:'Recibido · pendiente de revisión',pending:'Pendiente',deferred:'Pendiente · lo entregarás después',not_applicable:'No aplica'};
     card.append(docElement('p',labels[item.status]));
     const base='/intakes/'+state.intake+'/documents/'+item.participant_id+'/'+item.code;

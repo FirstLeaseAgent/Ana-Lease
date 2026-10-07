@@ -82,6 +82,74 @@ class DocumentTests(unittest.TestCase):
             row=next(r for r in d.requirements(self.people,deps) if r['code']=='documento_condicional')
             self.assertIs(row['applicable'],expected)
 
+    def test_shared_rfc_documents_are_requested_and_counted_once(self):
+        routes,_=self.routes()
+        out=routes['/intakes/{intake_id}/documents'](INTAKE,None)
+        self.assertEqual(len(out['documents']),4)
+        self.assertEqual(out['required_missing'],3)
+        shared=next(r for r in out['documents'] if r['code']=='documento_persona')
+        self.assertEqual(len(shared['members']),2)
+        self.assertIn('Representante',shared['participant'])
+        self.assertIn('Aval',shared['participant'])
+
+    def test_grouping_keeps_distinct_missing_rfcs_and_document_codes_separate(self):
+        for rfc in ('EFGH020202AB1','',None):
+            people=copy.deepcopy(self.people);people[str(AVAL)]['rfc']=rfc
+            groups=d.grouped_requirements(d.requirements(people),people)
+            self.assertEqual(len(groups),5)
+        groups=d.grouped_requirements(d.requirements(self.people),self.people)
+        self.assertEqual({r['code'] for r in groups},{'documento_empresa','documento_persona','documento_opcional','documento_condicional'})
+
+    def test_optional_role_cannot_make_a_shared_required_document_optional(self):
+        catalog=copy.deepcopy(d.CATALOG)
+        next(r for r in catalog if r['role']=='RepresentanteLegal' and r['code']=='documento_persona')['required']=False
+        with patch.object(d,'CATALOG',catalog):
+            groups=d.grouped_requirements(d.requirements(self.people),self.people)
+        self.assertTrue(next(r for r in groups if r['code']=='documento_persona')['required'])
+
+    def test_unresolved_condition_cannot_use_another_roles_received_file(self):
+        catalog=copy.deepcopy(d.CATALOG)
+        row=next(r for r in catalog if r['role']=='Aval' and r['code']=='documento_persona')
+        row.update(dependency_field='estado_civil',dependency_value='Casado')
+        states=[{'participant_id':REP,'document_code':'documento_persona','status':'received','upload_id':UPLOAD}]
+        with patch.object(d,'CATALOG',catalog):
+            groups=d.grouped_requirements(d.requirements(self.people),self.people,states)
+        shared=[r for r in groups if r['code']=='documento_persona']
+        self.assertEqual(len(shared),2)
+        self.assertEqual([r['status'] for r in shared],['received','pending'])
+        self.assertIs(shared[1]['applicable'],None)
+
+    def test_upload_covers_all_matching_roles_with_one_storage_call(self):
+        routes,conn=self.routes()
+        class Request:
+            async def stream(self):yield b'%PDF-1.4\n'
+        with patch.object(d,'upload_configured',return_value=True),patch.object(d,'store_in_sharepoint',return_value='sharepoint-test-id') as store:
+            asyncio.run(routes['/intakes/{intake_id}/documents/{participant_id}/{code}/uploads/{upload_id}'](INTAKE,REP,'documento_persona',UPLOAD,Request()))
+        store.assert_called_once()
+        assignments=[params for query,params in conn.calls if query.startswith('INSERT INTO document_states')]
+        self.assertEqual({str(p[1]) for p in assignments},{str(REP),str(AVAL)})
+        self.assertTrue(all(p[4]==UPLOAD for p in assignments))
+
+    def test_defer_covers_group_and_cannot_hide_a_received_other_role(self):
+        routes,conn=self.routes()
+        routes['/intakes/{intake_id}/documents/{participant_id}/{code}/defer'](INTAKE,REP,'documento_persona',None)
+        assignments=[params for query,params in conn.calls if query.startswith('INSERT INTO document_states')]
+        self.assertEqual({str(p[1]) for p in assignments},{str(REP),str(AVAL)})
+        conn=FakeConn();conn.states=[{'participant_id':AVAL,'document_code':'documento_persona','status':'received','upload_id':UPLOAD}]
+        routes,_=self.routes(conn)
+        with self.assertRaises(HTTPException):routes['/intakes/{intake_id}/documents/{participant_id}/{code}/defer'](INTAKE,REP,'documento_persona',None)
+        self.assertFalse(any(q.startswith('INSERT INTO document_states') for q,_ in conn.calls))
+
+    def test_finalize_accepts_preexisting_file_from_one_role_and_links_other(self):
+        people=copy.deepcopy(self.people);people[str(AVAL)]['answers']['estado_civil']='Soltero'
+        routes,conn=self.routes(people=people)
+        conn.states=[{'participant_id':APP,'document_code':'documento_empresa','status':'received','upload_id':UPLOAD},
+                     {'participant_id':AVAL,'document_code':'documento_persona','status':'received','upload_id':UPLOAD}]
+        out=routes['/intakes/{intake_id}/finalize'](INTAKE,None)
+        self.assertEqual(out['status'],'submitted')
+        assignments=[params for query,params in conn.calls if query.startswith('INSERT INTO document_states')]
+        self.assertEqual(assignments,[(INTAKE,str(REP),'documento_persona','received',UPLOAD)])
+
     def test_formats_size_and_unconfigured_storage_fail_closed(self):
         self.assertEqual(d.inspect_file(b'%PDF-1.4\n'),('application/pdf','pdf'))
         self.assertEqual(d.inspect_file(bytes([255,216,255,1])),('image/jpeg','jpg'))
@@ -102,7 +170,9 @@ class DocumentTests(unittest.TestCase):
         routes,_=self.routes(conn)
         checklist=routes['/intakes/{intake_id}/documents'](INTAKE,None)
         rep_ine=next(r for r in checklist['documents'] if r['participant_id']==str(REP) and r['code']=='documento_persona')
-        self.assertEqual(rep_ine['reuse_sources'][0]['participant_id'],str(AVAL))
+        self.assertEqual(rep_ine['status'],'received')
+        self.assertEqual({m['participant_id'] for m in rep_ine['members']},{str(REP),str(AVAL)})
+        self.assertEqual(rep_ine['reuse_sources'],[])
         self.assertGreater(checklist['required_missing'],0)
         out=routes['/intakes/{intake_id}/documents/{participant_id}/{code}/defer'](INTAKE,APP,'documento_empresa',None)
         self.assertTrue(out['ok'])

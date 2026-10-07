@@ -41,6 +41,46 @@ def requirements(people, dependencies=None):
     return result
 
 
+def grouped_requirements(rows, people, states=()):
+    """One checklist item per RFC/type/code, confined to this intake.
+
+    Unknown conditions stay independent so grouping cannot bypass a role's
+    unanswered dependency. Catalogue codes identify interchangeable documents.
+    """
+    import re
+    state = {(str(s['participant_id']), s['document_code']): s for s in states}
+    groups = {}
+    for row in rows:
+        person = people[row['participant_id']]
+        rfc = (person.get('rfc') or '').strip().upper()
+        valid = re.fullmatch(r'(?:[A-ZÑ&]{3}[0-9]{6}[A-Z0-9]{3}|[A-ZÑ&]{4}[0-9]{6}[A-Z0-9]{3})', rfc)
+        identity = (person['subject_type'], rfc) if valid else ('participant', row['participant_id'])
+        condition = row['participant_id'] if row['applicable'] is None else row['applicable']
+        key = (identity, row['code'], condition)
+        if key not in groups:
+            groups[key] = {**row, 'required':False, 'members':[], 'reuse_sources':[]}
+        group = groups[key]
+        group['required'] |= row['required']
+        current = state.get((row['participant_id'],row['code']), {})
+        group['members'].append({'participant_id':row['participant_id'], 'code':row['code'],
+                                 'participant':row['participant'], 'status':current.get('status','pending'),
+                                 'upload_id':current.get('upload_id')})
+    for group in groups.values():
+        members = group['members']
+        received = next((m for m in members if m['status']=='received'), None)
+        group['status'] = ('not_applicable' if group['applicable'] is False else
+                           'received' if group['applicable'] is True and received else
+                           'deferred' if all(m['status']=='deferred' for m in members) else 'pending')
+        group['upload_id'] = received['upload_id'] if received and group['status']=='received' else None
+        group['participant'] = ' · '.join(dict.fromkeys(m['participant'] for m in members))
+    return list(groups.values())
+
+
+def required_missing(rows):
+    return sum(1 for row in rows if row['required'] and row['applicable'] is not False
+               and (row['applicable'] is not True or row['status']!='received'))
+
+
 def upload_configured():
     p = urlsplit(os.environ.get('N8N_DOCUMENTS_WEBHOOK_URL',''))
     return (p.scheme == 'https' and p.netloc == 'flagent.app.n8n.cloud'

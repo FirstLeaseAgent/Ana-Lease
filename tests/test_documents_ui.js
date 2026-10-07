@@ -11,7 +11,7 @@ const browser=vm.createContext({document:{querySelector:s=>nodes[s],createElemen
  if(path.endsWith('/conversation'))return {ok:true,json:async()=>({reply:'¿Cuál es su RFC?',stage:'capture'})};
  if(path.endsWith('/finalize')){submitted=true;return {ok:true,json:async()=>({ok:true,status:'submitted'})};}
  if(options.method&&options.method!=='GET')return {ok:true,json:async()=>({ok:true,status:'received'})};
- return {ok:true,json:async()=>({message:'Continúa con documentos',status:submitted?'submitted':'open',required_missing:requiredMissing,upload_available:uploadAvailable,documents:[{participant_id:'company',participant:'Solicitante (PM)',code:'documento_empresa',label:'Documento ficticio',required:true,applicable:true,status:'pending',reuse_sources:[]}]})};
+ return {ok:true,json:async()=>({message:'Continúa con documentos',status:submitted?'submitted':'open',required_missing:requiredMissing,upload_available:uploadAvailable,documents:[{participant_id:'company',participant:'Solicitante (PM)',code:'documento_empresa',label:'Documento ficticio',required:true,applicable:true,status:'pending',reuse_sources:[],members:[{participant_id:'company',participant:'Representante (PF) · N*****'},{participant_id:'aval',participant:'Aval (PF) · N*****'}]}]})};
 }});
 vm.runInContext(fs.readFileSync('static/app.js','utf8'),browser);
 vm.runInContext(fs.readFileSync('static/documents.js','utf8'),browser);
@@ -20,6 +20,8 @@ const flatten=node=>[node,...node.children.flatMap(child=>typeof child==='object
 (async()=>{
  await vm.runInContext('loadDocuments()',browser);
  let all=flatten(nodes['#documents']);
+ assert.equal(all.filter(n=>n.type==='file').length,1);
+ assert.ok(all.some(n=>n.textContent.includes('Un solo archivo cubre estos roles')&&n.textContent.includes('Representante (PF), Aval (PF)')));
  assert.equal(all.find(n=>n.textContent==='Subir archivo').disabled,true);assert.equal(all.find(n=>n.textContent==='Finalizar solicitud').disabled,true);
  const defer=all.find(n=>n.textContent==='No lo tengo ahora');await defer.handlers.click();
  assert.ok(calls.some(c=>c.path.endsWith('/documento_empresa/defer')&&c.options.method==='POST'));
