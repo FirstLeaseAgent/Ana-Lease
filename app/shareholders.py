@@ -30,6 +30,20 @@ def list_finished(message):
                     'no hay ninguno','ninguno','ninguna'}
 
 
+def completion_evidence(message,stage=None):
+    """Require an express ending; a model proposal or an acknowledgement isn't consent."""
+    text=' '.join(message.casefold().strip(' .!').split())
+    if '?' in text or '¿' in text:return False
+    if stage=='guarantors' and re.search(r'\b(accionistas|socios)\b',text):return False
+    if stage=='shareholders' and re.search(r'\bavales\b',text):return False
+    if list_finished(message):return True
+    return bool(re.fullmatch(
+        r'(?:ya )?(?:termin[eé]|terminamos|he terminado|acab[eé]|acabamos)(?: de (?:registrar|agregar|capturar)(?: (?:a )?(?:los |mis |todos los )?(?:accionistas|socios|avales))?)?|'
+        r'(?:con (?:[eé]l|ella|ellos|ellas|este|esta) )?(?:terminamos|acabamos)|'
+        r'(?:ya )?(?:est[aá]n|quedaron) todos(?: (?:los |mis )?(?:accionistas|socios|avales))?|'
+        r'no (?:tengo|hay|agregar[eé]) (?:m[aá]s|otros)(?: (?:accionistas|socios|avales))?',text))
+
+
 def applicant(people):
     return next((p for p in people.values() if p['role']=='solicitante'), None)
 
@@ -102,13 +116,14 @@ def local_proposal(people,message,active,missing,stage):
             company=applicant(people)
             return {'reply':'La lista de avales quedó confirmada.','actions':[action('finish_guarantors',target=company['id'],message=message)]}
         if text not in {'aval','agrega un aval','agregar aval','otro aval','agrega otro aval'}:
-            return {'reply':'¿Quién será el aval? Puedes indicar que es la misma persona de otro rol o responder «sin aval».','actions':[]}
+            return {'reply':'¿Quién será el aval? Puedes indicar que es la misma persona de otro rol o responder «sin aval».','actions':[]} if text in {'ok','sí','si','listo'} else None
     if stage=='shareholders' and not active:
-        return {'reply':'¿Quién tiene más del 10% de la empresa? Puedes indicar la persona y su porcentaje en una respuesta, o decir «no hay más».','actions':[]}
+        return {'reply':'¿Quién tiene más del 10% de la empresa? Puedes indicar la persona y su porcentaje en una respuesta, o decir «no hay más».','actions':[]} if text in {'ok','sí','si','listo'} else None
     if not active or people[active]['role']!='accionista':return None
     field=missing(people[active])[0]
     # Short questions, commands and references are never stored as identity data.
     if any(mark in message for mark in ('?','¿')) or re.search(
         r'\b(mismo|misma|igual|agrega|representante|contacto|aval|accionista|corrige|cambia|no sé|no se|hola|ok|listo)\b',text):
-        return {'reply':'Responde el dato pendiente o indica una relación completa, por ejemplo «el accionista es el mismo representante».','actions':[]}
+        return None
+    if re.search(r'\b(tiene|soy|es|llama|participaci[oó]n|porcentaje|ayuda|puedo|termin[eé]|terminamos)\b',text):return None
     return {'reply':'Dato guardado.','actions':[action('save_field',target=active,field=field,value=message.strip(),message=message)]}

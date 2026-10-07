@@ -1,4 +1,4 @@
-const schema = {"type": "object", "additionalProperties": false, "required": ["reply", "actions"], "properties": {"reply": {"type": "string"}, "actions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["type", "target_id", "source_id", "role", "field", "value", "evidence"], "properties": {"type": {"type": "string", "enum": ["add_participant", "save_field", "reuse_field", "focus_participant"]}, "target_id": {"type": "string"}, "source_id": {"type": ["string", "null"]}, "role": {"type": ["string", "null"], "enum": ["aval", "representante", null]}, "field": {"type": ["string", "null"]}, "value": {"type": ["string", "null"]}, "evidence": {"type": "string"}}}}}};
+const schema = {"type": "object", "additionalProperties": false, "required": ["reply", "actions"], "properties": {"reply": {"type": "string"}, "actions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["type", "target_id", "source_id", "role", "field", "value", "evidence"], "properties": {"type": {"type": "string", "enum": ["add_participant", "save_field", "reuse_field", "focus_participant", "finish_shareholders", "finish_guarantors"]}, "target_id": {"type": "string"}, "source_id": {"type": ["string", "null"]}, "role": {"type": ["string", "null"], "enum": ["aval", "representante", "accionista", null]}, "field": {"type": ["string", "null"]}, "value": {"type": ["string", "null"]}, "evidence": {"type": "string"}}}}}};
 
 const incoming = $input.first().json;
 const body = incoming.body;
@@ -16,4 +16,3 @@ return [{json:{ok:true,request:{
   input:[{role:'user',content:[{type:'input_text',text:JSON.stringify({message:body.message,context:body.context,history:body.history})}]}],
   text:{format:{type:'json_schema',name:'analease_capture',strict:true,schema}}
 }}}];
-

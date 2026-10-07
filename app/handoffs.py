@@ -19,7 +19,7 @@ def literal_name(message):
     text=message.strip()
     if not re.fullmatch(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ '\-]{2,159}",text):return False
     if not 2<=len(text.split())<=10:return False
-    return not re.search(r'\b(ok|hola|gracias|listo|lista|no|sé|se|igual|mismo|misma|contacto|representantes?|aval(?:es)?|accionistas?|solicitante|agrega|quiero|puedo|ayuda|mañana|seguimos|terminar|continuar|empresa|sociedad|sa|cv)\b',text,re.I)
+    return not re.search(r'\b(ok|hola|gracias|listo|lista|no|sé|se|es|son|soy|tiene|posee|llama|participaci[oó]n|terminamos|acabamos|igual|mismo|misma|contacto|representantes?|aval(?:es)?|accionistas?|socios?|solicitante|agrega|quiero|puedo|ayuda|mañana|seguimos|terminar|continuar|empresa|sociedad|sa|cv)\b',text,re.I)
 
 
 def pf_rfc(message):

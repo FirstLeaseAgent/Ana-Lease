@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from .rules import FIELDS, masked_name, normalized_rfc
-from .catalog import fields_for, field_rows, question_for, reuse_source, validate_value
+from .catalog import fields_for, field_rows, question_for, reuse_source, validate_value, baseline
 from .memory import model_memory, relations_from_actions, identity_members
 from . import shareholders
 from . import handoffs
@@ -78,7 +78,7 @@ def context_for(people, preferred=None, session_email=None):
          'known_fields': sorted(list(p['answers']) + (['rfc'] if p.get('rfc') else [])),
          'missing_fields': missing(p)} for pid, p in people.items()
     ]}
-    context['capture_schema']=[{'participant_id':pid,'fields':[{'code':r['code'],'question':r['question'],'type':r['type'],'options':r['options']} for r in field_rows(p) or []]} for pid,p in people.items()]
+    context['capture_schema']=[{'participant_id':pid,'fields':[{'code':r['code'],'question':r['question'],'type':r['type'],'options':r['options']} for r in field_rows(p if p.get('catalog') is not None else dict(p,catalog=baseline())) or []]} for pid,p in people.items()]
     if session_email:
         context['participants'].append({'id':'session_user','role':'usuario_verificado','subject_type':'PF',
             'hint':'Usuario que inició sesión · correo verificado',
@@ -94,6 +94,16 @@ def context_for_turn(people, preferred, history, shown_question=None, session_em
         raise InvalidProposal('La pregunta cambió; recarga para continuar')
     context = context_for(people, preferred, session_email)
     active = context['active_participant_id']
+    stage=capture_stage(people,preferred)
+    company=shareholders.applicant(people)
+    pending_role=('representante' if pending_representative(people,preferred) else
+                  {'shareholders':'accionista','guarantors':'aval'}.get(stage))
+    context['capture_stage']=stage
+    context['participant_transition']={'pending_role':pending_role,'company_id':company['id'] if company else None,
+        'can_finish':not active and stage in ('shareholders','guarantors'),
+        'new_participant_schema':{subject:[{'code':r['code'],'question':r['question'],'type':r['type'],'options':r['options']} for r in field_rows({
+            'role':pending_role,'subject_type':subject,'catalog':(company.get('catalog') if company else None) or baseline()
+        }) or []] for subject in (('PF',) if pending_role=='representante' else ('PF','PM'))} if pending_role else {}}
     field = missing(people[active])[0] if active else None
     context['current_question'] = {'text': question, 'participant_id': active, 'field': field}
     options = []
@@ -251,7 +261,7 @@ def implicit_representative_input(people,message):
 
 
 def implicit_list_input(people,message,preferred=None):
-    if active_person(people,preferred) or shareholders.list_finished(message):return False
+    if active_person(people,preferred) or shareholders.completion_evidence(message):return False
     if capture_stage(people,preferred) not in ('shareholders','guarantors'):return False
     if handoffs.literal_name(message):return True
     try:normalized_rfc(message)
@@ -266,6 +276,10 @@ def identity_audit(people, audit, message):
     if not reference and declaration:
         reference=identity_reference(declaration['identity'])
         if reference:reference=dict(reference,target_role='accionista')
+    if not reference and not any(mark in message for mark in ('?','¿')):
+        clause=re.search(r'\b(?:es|soy) (?:el mismo|la misma)(?: que)? (?:el |la )?(?:contacto|representante(?: legal)?|aval|accionista)(?: [1-3])?\b',message,re.I)
+        if clause and not re.search(r'\b(no|si|correo|tel[eé]fono|email)\b',message[:clause.start()],re.I):
+            reference=identity_reference(clause.group(0))
     if not reference:
         # The question asks who will act as representative; an exact stored full name
         # identifies that source, without changing the scope of later name answers.
@@ -541,7 +555,7 @@ def apply_proposal(people, proposal, message, preferred=None, session_email=None
                 capture_stage(result,preferred_id)!=('shareholders' if kind=='finish_shareholders' else 'guarantors')):
                 raise InvalidProposal('Completa los datos antes de cerrar la lista de participantes')
             expected=shareholders.local_proposal(result,message,None,missing,capture_stage(result,preferred_id))
-            if not expected or not any(a['type']==kind for a in expected['actions']):
+            if not (expected and any(a['type']==kind for a in expected['actions'])) and not shareholders.completion_evidence(message,capture_stage(result,preferred_id)):
                 raise InvalidProposal('Confirma expresamente el cierre de la lista de participantes')
             company['shareholders_complete' if kind=='finish_shareholders' else 'guarantors_complete']=True
             audit.append({'type':kind,'target_id':company['id'],'evidence':evidence})
@@ -556,10 +570,14 @@ def apply_proposal(people, proposal, message, preferred=None, session_email=None
             role = action['role']
             implied=role=='representante' and implicit_representative_input(people,message)
             stage=capture_stage(people,preferred)
-            if not active_person(people,preferred) and role=={'shareholders':'accionista','guarantors':'aval'}.get(stage):
+            if not active_person(people,preferred) and (role=={'shareholders':'accionista','guarantors':'aval'}.get(stage) or (role=='representante' and pending_representative(people,preferred))):
                 reference=identity_reference(message)
                 declaration=shareholders.identity_declaration(message) if stage=='shareholders' else None
                 implied=implied or bool(declaration or (reference and reference['target_role'] is None) or implicit_list_input(people,message,preferred))
+                # The displayed question already asks for this role. The model may
+                # interpret a natural answer; literal field evidence is still validated below.
+                if not any(mark in message for mark in ('?','¿')) and not re.fullmatch(r'(?:ok|s[ií]|listo|hola|gracias)',message.strip(' .!'),re.I) and not shareholders.completion_evidence(message):
+                    implied=True
             if role not in ('aval', 'representante','accionista') or (role not in message.casefold() and not implied) or new_id:
                 raise InvalidProposal('Revisa qué participante deseas agregar')
             if action['target_id'] != 'new' or any(action[k] is not None for k in ('source_id', 'field', 'value')):

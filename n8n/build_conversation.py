@@ -12,9 +12,9 @@ SCHEMA = {
             'type': 'object', 'additionalProperties': False,
             'required': ['type', 'target_id', 'source_id', 'role', 'field', 'value', 'evidence'],
             'properties': {
-                'type': {'type': 'string', 'enum': ['add_participant','save_field','reuse_field','focus_participant']},
+                'type': {'type': 'string', 'enum': ['add_participant','save_field','reuse_field','focus_participant','finish_shareholders','finish_guarantors']},
                 'target_id': {'type': 'string'}, 'source_id': {'type': ['string','null']},
-                'role': {'type': ['string','null'], 'enum': ['aval','representante',None]},
+                'role': {'type': ['string','null'], 'enum': ['aval','representante','accionista',None]},
                 'field': {'type': ['string','null']},
                 'value': {'type': ['string','null']}, 'evidence': {'type': 'string'},
             },

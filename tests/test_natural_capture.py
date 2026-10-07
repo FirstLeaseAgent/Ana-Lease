@@ -91,7 +91,7 @@ class NaturalCaptureTests(unittest.TestCase):
                         'no es el mismo contacto y tiene el 60%',
                         'el teléfono es el mismo contacto y tiene el 60%']:
             proposal=c.local_reference(people(),message,None,[])
-            self.assertEqual(proposal['actions'],[])
+            self.assertFalse(proposal and proposal['actions'])
 
     def test_list_close_cannot_skip_pending_curp_or_occupation(self):
         rows=people();rows,_,pid=turn(rows,'es el mismo contacto y tiene el 60%',links=relations(rows))
