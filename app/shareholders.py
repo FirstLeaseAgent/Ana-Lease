@@ -6,6 +6,30 @@ MAX_SHAREHOLDERS = 3  # Three records in the supplied company application.
 CURP = re.compile(r'^[A-Z][AEIOUX][A-Z]{2}[0-9]{6}[HM][A-Z]{5}[A-Z0-9][0-9]$')
 
 
+def identity_declaration(message):
+    """Read a single explicit identity plus percentage, without inferring from channels."""
+    text=' '.join(message.casefold().strip(' .!').split())
+    number=r'\d{1,3}(?:[.,]\d{1,4})?\s*%'
+    source=r'(?:contacto|representante(?: legal)?|aval|accionista)(?: [1-3])?'
+    identity=r'es (?:el mismo|la misma)(?: que)? (?:el |la )?'+source
+    patterns=[
+        r'(?:(?:el |la )?(?:principal|accionista) )?(?:con |tiene |posee )(?P<percent>'+number+r')(?: de participaci[oó]n)? (?P<identity>'+identity+r')',
+        r'(?:(?:el |la )?accionista )?(?P<identity>'+identity+r')[,;]? (?:y )?(?:tiene|posee|con) (?:el )?(?P<percent>'+number+r')(?: de participaci[oó]n)?',
+    ]
+    match=next((m for pattern in patterns if (m:=re.fullmatch(pattern,text))),None)
+    if not match:return None
+    # Keep the user's exact numeric text for evidence validation.
+    literal=re.search(number,message)
+    return {'identity':match['identity'],'percentage':literal.group(0)}
+
+
+def list_finished(message):
+    text=' '.join(message.casefold().strip(' .!').split())
+    return text in {'no hay más','no hay mas','ya no hay más','ya no hay mas','no hay otros',
+                    'son todos','ya son todos','es todo','eso es todo','no faltan más','no faltan mas',
+                    'no hay ninguno','ninguno','ninguna'}
+
+
 def applicant(people):
     return next((p for p in people.values() if p['role']=='solicitante'), None)
 
@@ -67,20 +91,20 @@ def local_proposal(people,message,active,missing,stage):
                      'no hay más accionistas','no hay mas accionistas',
                      'no hay accionistas con más del 10%','no hay accionistas con mas del 10%',
                      'no hay accionistas con participación mayor al 10%','no hay accionistas con participacion mayor al 10%'}
-    if closing:
+    if closing or (stage=='shareholders' and not active and list_finished(message)):
         company=applicant(people)
         if stage!='shareholders' or active or not needs_completion(people):
             return {'reply':'Primero completa los datos pendientes de la empresa, representante y accionistas.','actions':[]}
         return {'reply':'La lista de accionistas quedó confirmada.','actions':[
             action('finish_shareholders',target=company['id'],message=message)]}
     if stage=='guarantors' and not active:
-        if text in {'sin aval','sin avales','listo avales','no agregar aval','no agregar avales'}:
+        if list_finished(message) or text in {'sin aval','sin avales','listo avales','no agregar aval','no agregar avales'}:
             company=applicant(people)
             return {'reply':'La lista de avales quedó confirmada.','actions':[action('finish_guarantors',target=company['id'],message=message)]}
         if text not in {'aval','agrega un aval','agregar aval','otro aval','agrega otro aval'}:
-            return {'reply':'Para agregar un aval escribe «aval». Cuando termines escribe «listo avales»; si no agregarás ninguno, escribe «sin aval».','actions':[]}
+            return {'reply':'¿Quién será el aval? Puedes indicar que es la misma persona de otro rol o responder «sin aval».','actions':[]}
     if stage=='shareholders' and not active:
-        return {'reply':'Para agregar a alguien escribe «accionista». Cuando termines, escribe «listo accionistas». Si nadie tiene más del 10%, escribe «no hay accionistas con más del 10%».','actions':[]}
+        return {'reply':'¿Quién tiene más del 10% de la empresa? Puedes indicar la persona y su porcentaje en una respuesta, o decir «no hay más».','actions':[]}
     if not active or people[active]['role']!='accionista':return None
     field=missing(people[active])[0]
     # Short questions, commands and references are never stored as identity data.

@@ -32,3 +32,15 @@ El ciclo del nuevo rol y las respuestas a sus preguntas se procesan en el servid
 `Accionista` ya está disponible en el catálogo documental y ahora se aplica a participantes reales del nuevo rol. Se conserva la configuración vigente: no se inventan requisitos documentales. Los documentos del accionista usan su tipo PF/PM. La interfaz sin IA también puede crear el rol y cerrar las listas mediante endpoints autenticados, sin llamar al modelo.
 
 Verificación automatizada: pruebas de PF y PM, identidad compartida, cierre explícito, reanudación, suma de porcentajes, duplicados, límite, vínculo a la empresa, campos del catálogo, documentos, atomicidad del turno y compatibilidad con n8n.
+
+## Respuestas naturales en las transiciones
+
+En la pregunta por accionistas, se acepta una identidad inequívoca junto con su porcentaje: `el principal con 99.6% de participación es el mismo que el contacto`, o `es el mismo contacto y tiene el 99.6%`. Se crea el rol, se reutilizan los campos comunes admitidos y se guarda el porcentaje en el mismo turno atómico. Si la memoria confirma contacto = representante, el RFC disponible en el representante se puede reutilizar desde esa relación. Se pide la CURP si falta; no se vuelve a pedir el porcentaje. Una referencia ambigua o un porcentaje inválido no guarda parcialmente el turno.
+
+En las transiciones de accionistas y avales, `es el mismo contacto`, el nombre completo inequívoco de una persona registrada, un nombre nuevo o un RFC pueden iniciar el rol que la pregunta solicita. El contexto de la fase determina ese rol; estas entradas no permiten crear participantes en una fase distinta o cerrar datos pendientes. Los nombres nuevos no aportan automáticamente RFC ni datos de contacto.
+
+`no hay más`, `son todos`, `eso es todo` y `ninguno` cierran exclusivamente la lista que se está preguntando, cuando sus registros están completos. Nunca saltan CURP, porcentaje, RFC, ocupación u otros requisitos pendientes. `ok` conserva su significado de reconocimiento y no cierra listas.
+
+Las respuestas literales cortas a cargo y ocupación, como `Director`, se guardan para el campo preguntado sin consultar al modelo. No se copia cargo como ocupación: el usuario debe dar esa respuesta para el nuevo rol. Las dudas y referencias siguen sin almacenarse como títulos. Las preguntas muestran un rol breve; si hay varios participantes de ese rol, muestran su número, sin repetir información personal.
+
+Estos ajustes se ejecutan en Render y mantienen el workflow actual de n8n. No amplían el esquema del modelo ni hacen que comprenda cualquier redacción: el esquema actual de creación en n8n aún enumera solo representante y aval. La mejora posterior de interpretación general deberá incorporar accionista y las intenciones de cierre al esquema y prompt del workflow, manteniendo en el servidor las validaciones y el guardado atómico.

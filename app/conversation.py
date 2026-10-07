@@ -154,19 +154,18 @@ def align_direct_answer(proposal, people, message, preferred, question):
         return proposal, None
     active = active_person(people, preferred)
     actions = proposal.get('actions')
-    # A repeated cargo question must not discard a plain answer to that field.
+    # A repeated role question must not discard a plain answer to that field.
     # Preserve questions, uncertainty and identity references as model decisions.
-    if active and actions == [] and missing(people[active])[0] == 'cargo':
+    if active and actions == [] and missing(people[active])[0] in ('cargo','ocupacion'):
+        field=missing(people[active])[0]
         value = message.strip()
-        repeated = question_for(people[active], 'cargo') in proposal.get('reply', '')
-        scalar = bool(re.fullmatch(r'[A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ &/.-]{0,79}', value))
-        conversational = re.search(r'\b(no|se|sé|soy|yo|mismo|misma|contacto|correo|teléfono|rfc|corrige|cambia|agrega|ok|hola|cuál|cual|qué|que|puedo|puede|ayuda)\b', value, re.I)
-        if repeated and scalar and not conversational:
+        repeated = question_for(people[active], field) in proposal.get('reply', '')
+        if repeated and handoffs.role_answer(value):
             aligned = copy.deepcopy(proposal)
             aligned['actions'] = [{'type':'save_field','target_id':active,'source_id':None,
-                                  'role':None,'field':'cargo','value':value,'evidence':value}]
+                                  'role':None,'field':field,'value':value,'evidence':value}]
             return aligned, {'type':'align_direct_answer','target_id':active,
-                             'proposed_field':None,'field':'cargo'}
+                             'proposed_field':None,'field':field}
     if not active or not isinstance(actions, list) or len(actions) != 1:
         return proposal, None
     action = actions[0]
@@ -231,14 +230,14 @@ def pending_representative(people,preferred=None):
                 and not any(p['role']=='representante' for p in people.values()))
 
 
-def named_representative_reference(people,message,relations=None):
+def named_representative_reference(people,message,relations=None,role='representante'):
     matches=handoffs.matching_names(people,message)
     if not matches:return None
     first=matches[0]
     if any(pid not in identity_members(people,relations or [],first) for pid in matches):
         return {'ambiguous':True}
     source=people[first];ids=[pid for pid,p in people.items() if p['role']==source['role']]
-    return {'target_role':'representante','target_index':None,'source_role':source['role'],
+    return {'target_role':role,'target_index':None,'source_role':source['role'],
             'source_index':str(ids.index(first)+1),'create':True}
 
 
@@ -251,19 +250,34 @@ def implicit_representative_input(people,message):
     return bool(handoffs.matching_names(people,message) or handoffs.literal_name(message) or handoffs.pf_rfc(message))
 
 
+def implicit_list_input(people,message,preferred=None):
+    if active_person(people,preferred) or shareholders.list_finished(message):return False
+    if capture_stage(people,preferred) not in ('shareholders','guarantors'):return False
+    if handoffs.literal_name(message):return True
+    try:normalized_rfc(message)
+    except ValueError:return False
+    return True
+
+
 def identity_audit(people, audit, message):
     """Persist an explicit identity statement only after validated data reuse."""
     reference=identity_reference(message)
+    declaration=shareholders.identity_declaration(message)
+    if not reference and declaration:
+        reference=identity_reference(declaration['identity'])
+        if reference:reference=dict(reference,target_role='accionista')
     if not reference:
         # The question asks who will act as representative; an exact stored full name
         # identifies that source, without changing the scope of later name answers.
         matches=handoffs.matching_names(people,message)
         reused={a.get('source_id') for a in audit if a.get('type')=='reuse_field' and a.get('field')=='nombre'
-                and a.get('target_id') in people and people[a['target_id']]['role']=='representante'}
+                and a.get('target_id') in people and people[a['target_id']]['role'] in ('representante','accionista','aval')}
         sources=[pid for pid in matches if pid in reused]
         if len(sources)==1:
             source=sources[0];ids=[pid for pid,p in people.items() if p['role']==people[source]['role']]
-            reference={'target_role':'representante','source_role':people[source]['role'],'source_index':str(ids.index(source)+1)}
+            target_roles={people[a['target_id']]['role'] for a in audit if a.get('type')=='reuse_field' and a.get('field')=='nombre' and a.get('source_id')==source and a.get('target_id') in people}
+            if len(target_roles)==1:
+                reference={'target_role':next(iter(target_roles)),'source_role':people[source]['role'],'source_index':str(ids.index(source)+1)}
     if not reference:
         return []
     source=source_for_reference(people,reference)
@@ -285,7 +299,21 @@ def identity_audit(people, audit, message):
 
 def local_reference(people,message,preferred,history,relations=None):
     active=active_person(people,preferred)
+    stage=capture_stage(people,preferred)
+    list_role={'shareholders':'accionista','guarantors':'aval'}.get(stage) if not active else None
+    if list_role and shareholders.list_finished(message):
+        return shareholders.local_proposal(people,message,active,missing,stage)
+    declaration=shareholders.identity_declaration(message) if stage=='shareholders' or (active and people[active]['role']=='accionista') else None
     reference=identity_reference(message)
+    if list_role and not reference and not declaration:
+        reference=named_representative_reference(people,message,relations,list_role)
+        if reference and reference.get('ambiguous'):
+            return {'reply':'Ese nombre coincide con más de un participante. Indica de qué rol deseas tomar sus datos.','actions':[]}
+    if declaration:
+        reference=identity_reference(declaration['identity'])
+        reference=dict(reference,target_role='accionista',create=not active)
+    if not active and stage in ('shareholders','guarantors') and reference and reference['target_role'] is None:
+        reference=dict(reference,target_role='accionista' if stage=='shareholders' else 'aval',create=True)
     pending=pending_representative(people,preferred)
     if pending and not reference:
         reference=named_representative_reference(people,message,relations)
@@ -355,8 +383,17 @@ def local_reference(people,message,preferred,history,relations=None):
         if not actions:
             actions=[{'type':'focus_participant','target_id':target_id,'source_id':None,
                       'role':None,'field':None,'value':None,'evidence':message}]
+        if declaration:
+            actions.append(shareholders.action('save_field',target=target_id,
+                field='porcentaje_participacion',value=declaration['percentage'],message=message))
         return {'reply':'Usaré los datos disponibles de la misma persona.','actions':actions}
     if not active:
+        if list_role and implicit_list_input(people,message,preferred):
+            try:normalized_rfc(message);field='rfc'
+            except ValueError:field='nombre'
+            return {'reply':'Vamos a completar a esta persona.','actions':[
+                shareholders.action('add_participant',role=list_role,message=message),
+                shareholders.action('save_field',field=field,value=message.strip(),message=message)]}
         if pending:
             if handoffs.literal_name(message) or handoffs.pf_rfc(message):
                 field='rfc' if handoffs.pf_rfc(message) else 'nombre'
@@ -373,6 +410,11 @@ def local_reference(people,message,preferred,history,relations=None):
     field=missing(person)[0]
     channel=handoffs.channel_reference(people,relations,history,active,field,message)
     if channel:return channel
+    if person['role'] in ('accionista','aval') and shareholders.list_finished(message):
+        return {'reply':'Antes de cerrar la lista, falta completar a esta persona. '+question_for(person,field),'actions':[]}
+    if field in ('cargo','ocupacion') and handoffs.role_answer(message):
+        return {'reply':'Dato guardado.','actions':[
+            shareholders.action('save_field',target=active,field=field,value=message.strip(),message=message)]}
     if field in COMMON_FIELDS and re.fullmatch(r'(?:es |son )?(?:el |la |los )?(?:mismo|misma|mismos|igual)',message.strip(' .!'),re.I):
         linked=identity_members(people,relations or [],active)
         candidates=[pid for pid in people if pid in linked and pid!=active and
@@ -411,13 +453,20 @@ def resume_reply(people, preferred=None):
             if applicant['subject_type']=='PM' and not any(p['role']=='representante' for p in people.values()):
                 return 'Los datos están guardados. ¿Quién es el representante legal de la empresa? Escribe su nombre completo o «es el mismo contacto».'
             if shareholders.needs_completion(people):
-                return 'Ahora registraremos los principales accionistas con más del 10% de participación. Escribe «accionista» para agregar uno. Al terminar escribe «listo accionistas»; si no hay ninguno, escribe «no hay accionistas con más del 10%».'
+                if any(p['role']=='accionista' for p in people.values()):
+                    return '¿Hay otro accionista con más del 10% de participación? Puedes agregarlo o responder «no hay más».'
+                return '¿Quién tiene más del 10% de participación en la empresa? Si ya lo registramos, puedes decir, por ejemplo, «es el mismo contacto y tiene el 60%». Si no hay ninguno, indícalo.'
             if applicant.get('shareholders_enabled') and not applicant.get('guarantors_complete'):
-                return 'Ahora puedes agregar los avales de la solicitud. Escribe «aval» para agregar uno. Al terminar escribe «listo avales»; si no agregarás ninguno, escribe «sin aval».'
+                if any(p['role']=='aval' for p in people.values()):
+                    return '¿Agregarás otro aval? Puedes indicar quién es o responder «no hay más».'
+                return '¿Quién será el aval de la solicitud? Puede ser una persona ya registrada. Si no agregarás uno, responde «sin aval».'
             return 'Los datos están guardados. Continuemos con los documentos de esta solicitud.'
         return 'Este avance está guardado. Puedes agregar un aval o representante, o regresar después.'
     person = people[active]
-    return f'Estamos completando la información de {person_hint(person)}. {question_for(person,missing(person)[0])}'
+    label='Representante legal' if person['role']=='representante' else person['role'].capitalize()
+    peers=[pid for pid,p in people.items() if p['role']==person['role']]
+    if len(peers)>1:label+=' '+str(peers.index(active)+1)
+    return f'{label}: {question_for(person,missing(person)[0])}'
 
 
 def capture_stage(people, preferred=None):
@@ -506,6 +555,11 @@ def apply_proposal(people, proposal, message, preferred=None, session_email=None
         if kind == 'add_participant':
             role = action['role']
             implied=role=='representante' and implicit_representative_input(people,message)
+            stage=capture_stage(people,preferred)
+            if not active_person(people,preferred) and role=={'shareholders':'accionista','guarantors':'aval'}.get(stage):
+                reference=identity_reference(message)
+                declaration=shareholders.identity_declaration(message) if stage=='shareholders' else None
+                implied=implied or bool(declaration or (reference and reference['target_role'] is None) or implicit_list_input(people,message,preferred))
             if role not in ('aval', 'representante','accionista') or (role not in message.casefold() and not implied) or new_id:
                 raise InvalidProposal('Revisa qué participante deseas agregar')
             if action['target_id'] != 'new' or any(action[k] is not None for k in ('source_id', 'field', 'value')):

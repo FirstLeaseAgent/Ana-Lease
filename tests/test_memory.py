@@ -156,7 +156,7 @@ class MemoryTest(unittest.TestCase):
         conn=Conn()
         iid=UUID('00000000-0000-4000-8000-000000000001')
         body=main.ConversationInput(request_id=UUID('00000000-0000-4000-8000-000000000002'),
-                                   message='Director General',question=c.resume_reply(people,'rep'))
+                                   message='Soy Director General',question=c.resume_reply(people,'rep'))
         proposal={'reply':'Continuamos','actions':[{'type':'save_field','target_id':'rep','source_id':None,
                   'role':None,'field':'cargo','value':'Director General','evidence':'Director General'}]}
         with patch.object(main,'owner',return_value='owner'), \

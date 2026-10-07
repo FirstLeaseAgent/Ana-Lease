@@ -19,13 +19,21 @@ def literal_name(message):
     text=message.strip()
     if not re.fullmatch(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ '\-]{2,159}",text):return False
     if not 2<=len(text.split())<=10:return False
-    return not re.search(r'\b(ok|hola|gracias|listo|lista|no|sé|se|igual|mismo|misma|contacto|representantes?|avales?|accionistas?|solicitante|agrega|quiero|puedo|ayuda|mañana|seguimos|terminar|continuar|empresa|sociedad|sa|cv)\b',text,re.I)
+    return not re.search(r'\b(ok|hola|gracias|listo|lista|no|sé|se|igual|mismo|misma|contacto|representantes?|aval(?:es)?|accionistas?|solicitante|agrega|quiero|puedo|ayuda|mañana|seguimos|terminar|continuar|empresa|sociedad|sa|cv)\b',text,re.I)
 
 
 def pf_rfc(message):
     try:rfc,kind=normalized_rfc(message)
     except ValueError:return False
     return kind=='PF'
+
+
+def role_answer(message):
+    """A short literal answer to cargo/occupation needs no model interpretation."""
+    value=message.strip()
+    if normalized_name(value) in {'son todos','ya son todos','es todo','eso es todo','ninguno','ninguna'}:return False
+    return bool(re.fullmatch(r'[A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ &/.-]{0,79}',value)) and not re.search(
+        r'\b(no|se|sé|soy|yo|mismo|misma|igual|contacto|representante|aval|accionista|correo|teléfono|rfc|corrige|cambia|agrega|ok|hola|listo|gracias|cuál|cual|qué|que|puedo|puede|ayuda)\b',value,re.I)
 
 
 def channel_reference(people,relations,history,active,field,message):
