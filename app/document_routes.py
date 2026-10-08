@@ -25,7 +25,7 @@ class ReuseDocumentInput(BaseModel):
     source_participant_id: UUID
 
 
-def install(app, pool, owner, intake_for_owner, conversation_people, enabled):
+def install(app, pool, owner, intake_for_owner, conversation_people, enabled, notify=None):
     def scope(conn,intake_id,user_id,ready=True,editable=True):
         intake_for_owner(conn,intake_id,user_id,editable=editable)
         if not enabled(conn,user_id):
@@ -64,8 +64,8 @@ def install(app, pool, owner, intake_for_owner, conversation_people, enabled):
         rows=d.grouped_requirements(rows,people,states)
         missing=d.required_missing(rows)
         submitted=intake['status']=='submitted'
-        return {'documents':rows,'status':intake['status'],'required_missing':missing,'upload_available':not submitted and d.upload_configured(),
-                'message':('Solicitud recibida. Tus datos y archivos quedaron guardados. Hay documentos pendientes; el equipo podrá revisarlos y dar seguimiento contigo. Esto no implica aprobación.' if submitted and missing
+        return {'documents':rows,'status':intake['status'],'required_missing':missing,'upload_available':d.upload_configured(),
+                'message':('Solicitud recibida. Tus datos y archivos quedaron guardados. Puedes subir aquí los documentos pendientes cuando los tengas. El equipo podrá dar seguimiento contigo. Esto no implica aprobación.' if submitted and missing
                            else 'Solicitud recibida. Tus datos y documentos quedaron guardados y pendientes de revisión. Esto no implica aprobación.' if submitted
                            else 'Los documentos obligatorios están recibidos. Ya puedes finalizar tu solicitud.' if not missing
                            else 'Puedes finalizar tu solicitud aunque falten documentos. Los pendientes quedarán registrados para el seguimiento del equipo.')}
@@ -94,10 +94,15 @@ def install(app, pool, owner, intake_for_owner, conversation_people, enabled):
                             if member['status']!='received':
                                 assign(conn,intake_id,member['participant_id'],member['code'],'received',group['upload_id'])
                                 event(conn,intake_id,user_id,member['participant_id'],member['code'],'reuse',{'upload_id':str(group['upload_id']),'automatic':True})
+                if notify:
+                    conn.execute('INSERT INTO submission_notifications(intake_id,required_missing) VALUES(%s,%s) ON CONFLICT(intake_id) DO NOTHING',(intake_id,missing))
                 applicant=next(p for p in people.values() if p['role']=='solicitante')
                 conn.execute("UPDATE intakes SET status='submitted',updated_at=now() WHERE id=%s AND owner_id=%s",(intake_id,user_id))
                 event(conn,intake_id,user_id,applicant['id'],None,'finalize',{'recognition_started':False,
                       'required_missing':missing,'pending_documents':pending})
+        if notify:
+            try:notify(intake_id)
+            except Exception:logger.warning('Submission saved; notification remains pending for retry')
         return {'ok':True,'status':'submitted'}
 
     @app.post('/intakes/{intake_id}/documents/dependency')
@@ -109,9 +114,14 @@ def install(app, pool, owner, intake_for_owner, conversation_people, enabled):
             raise HTTPException(422,'Selecciona una opción de estado civil; si no lo sabes, deja el documento pendiente')
         with pool.connection() as conn:
             with conn.transaction():
-                _,rows=scope(conn,intake_id,user_id)
+                people,rows=scope(conn,intake_id,user_id,editable=False)
                 if not any(r['participant_id']==str(body.participant_id) and r['dependency_field']==body.field for r in rows):
                     raise HTTPException(404,'El dato no corresponde a esta solicitud')
+                intake=intake_for_owner(conn,intake_id,user_id)
+                if intake['status']=='submitted':
+                    existing=people.get(str(body.participant_id),{}).get('answers',{}).get(body.field)
+                    saved=conn.execute('SELECT value FROM document_dependencies WHERE intake_id=%s AND participant_id=%s AND field_code=%s',(intake_id,body.participant_id,body.field)).fetchone()
+                    if existing or saved:raise HTTPException(409,'Ese dato ya está guardado; solicita la corrección al equipo')
                 conn.execute('INSERT INTO document_dependencies(intake_id,participant_id,field_code,value) VALUES(%s,%s,%s,%s) ON CONFLICT(participant_id,field_code) DO UPDATE SET value=EXCLUDED.value,updated_at=now()',
                              (intake_id,body.participant_id,body.field,value))
                 event(conn,intake_id,user_id,body.participant_id,None,'dependency_answer',{'field':body.field,'value':value})
@@ -155,8 +165,13 @@ def install(app, pool, owner, intake_for_owner, conversation_people, enabled):
     async def upload(intake_id:UUID,participant_id:UUID,code:str,upload_id:UUID,request:Request):
         user_id=owner(request)
         with pool.connection() as conn:
-            _,rows=scope(conn,intake_id,user_id)
+            people,rows=scope(conn,intake_id,user_id,editable=False)
             requirement(rows,participant_id,code)
+            intake=intake_for_owner(conn,intake_id,user_id)
+            if intake['status']=='submitted':
+                states=conn.execute('SELECT participant_id,document_code,status,upload_id FROM document_states WHERE intake_id=%s',(intake_id,)).fetchall()
+                group=next(g for g in d.grouped_requirements(rows,people,states) if any(m['participant_id']==str(participant_id) and m['code']==code for m in g['members']))
+                if group['status']=='received':raise HTTPException(409,'Ese documento ya está recibido; solicita la revisión al equipo')
         if not d.upload_configured():
             raise HTTPException(503,'La carga de archivos estará disponible en breve. Puedes conservar tus pendientes.')
         chunks=[]
@@ -171,7 +186,7 @@ def install(app, pool, owner, intake_for_owner, conversation_people, enabled):
         digest=hashlib.sha256(content).hexdigest()
         with pool.connection() as conn:
             with conn.transaction():
-                people,rows=scope(conn,intake_id,user_id)
+                people,rows=scope(conn,intake_id,user_id,editable=False)
                 requirement(rows,participant_id,code)
                 rfc=people[str(participant_id)]['rfc']
                 previous=conn.execute('SELECT * FROM document_uploads WHERE id=%s',(upload_id,)).fetchone()
@@ -190,9 +205,9 @@ def install(app, pool, owner, intake_for_owner, conversation_people, enabled):
                 'file_name':f'{rfc}-{code.replace("_", "-")}-por-revisar-{upload_id}.{extension}'})
             with pool.connection() as conn:
                 with conn.transaction():
-                    intake_for_owner(conn,intake_id,user_id,editable=True)
+                    intake_for_owner(conn,intake_id,user_id)
                     conn.execute("UPDATE document_uploads SET status='received',storage_id=%s,updated_at=now() WHERE id=%s AND intake_id=%s",(storage_id,upload_id,intake_id))
-                    people,rows=scope(conn,intake_id,user_id)
+                    people,rows=scope(conn,intake_id,user_id,editable=False)
                     requirement(rows,participant_id,code)
                     group=next(g for g in d.grouped_requirements(rows,people) if any(m['participant_id']==str(participant_id) and m['code']==code for m in g['members']))
                     for member in group['members']:

@@ -37,8 +37,9 @@ const flatten=node=>[node,...node.children.flatMap(child=>typeof child==='object
  const capture=calls.find(c=>c.path.endsWith('/conversation'));assert.equal(JSON.parse(capture.options.body).message,'Quiero agregar un aval');
  requiredMissing=1;await vm.runInContext('loadDocuments()',browser);
  all=flatten(nodes['#documents']);const finish=all.find(n=>n.textContent==='Finalizar solicitud');assert.equal(finish.disabled,false);await finish.handlers.click();
- all=flatten(nodes['#documents']);assert.equal(vm.runInContext('state.step',browser),'submitted');assert.equal(all.some(n=>n.type==='file'||n.textContent==='Finalizar solicitud'||n.textContent==='Agregar otro aval'),false);
+ all=flatten(nodes['#documents']);assert.equal(vm.runInContext('state.step',browser),'submitted');assert.equal(all.some(n=>n.textContent==='Finalizar solicitud'||n.textContent==='Agregar otro aval'),false);
  assert.ok(calls.some(c=>c.path.endsWith('/finalize')&&c.options.method==='POST'));
  assert.ok(all.some(n=>n.textContent==='Pendiente'));
+ assert.equal(all.find(n=>n.textContent==='Subir archivo').disabled,false);
  console.log('Document UI gates uploads, saves deferrals, sends files and returns to participant capture');
 })().catch(error=>{console.error(error);process.exitCode=1;});

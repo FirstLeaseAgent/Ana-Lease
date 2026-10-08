@@ -13,15 +13,18 @@
       "name": "Webhook AnaLease",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
-      "position": [240, 300]
+      "position": [
+        240,
+        300
+      ]
     },
     {
       "parameters": {
         "resource": "message",
         "operation": "send",
-        "toRecipients": "={{ $json.body.email }}",
-        "subject": "Tu código para AnaLease",
-        "bodyContent": "={{ 'Tu código para continuar en AnaLease es ' + $json.body.code + '. Caduca en 10 minutos.' }}",
+        "toRecipients": "={{ $json.body.event === 'submitted' ? 'aortega@firstlease.com.mx' : $json.body.email }}",
+        "subject": "={{ $json.body.event === 'submitted' ? 'AnaLease · Solicitud recibida' : 'Tu código para AnaLease' }}",
+        "bodyContent": "={{ $json.body.event === 'submitted' ? 'AnaLease recibió una solicitud. Documentos requeridos pendientes: ' + $json.body.required_missing + '. Revisa la información y la conversación en: https://analease-captura-web.onrender.com/seguimiento?solicitud=' + $json.body.intake_id : 'Tu código para continuar en AnaLease es ' + $json.body.code + '. Caduca en 10 minutos.' }}",
         "additionalFields": {
           "bodyContentType": "Text",
           "saveToSentItems": false
@@ -31,24 +34,52 @@
       "name": "Enviar con Outlook",
       "type": "n8n-nodes-base.microsoftOutlook",
       "typeVersion": 2,
-      "position": [480, 300]
+      "position": [
+        480,
+        300
+      ]
     },
     {
       "parameters": {
         "respondWith": "json",
         "responseBody": "{\"ok\":true}",
-        "options": {"responseCode": 200}
+        "options": {
+          "responseCode": 200
+        }
       },
       "id": "355f43b2-adca-48bd-9e12-7316bde0b8fa",
       "name": "Confirmar envío",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
-      "position": [720, 300]
+      "position": [
+        720,
+        300
+      ]
     }
   ],
   "connections": {
-    "Webhook AnaLease": {"main": [[{"node": "Enviar con Outlook", "type": "main", "index": 0}]]},
-    "Enviar con Outlook": {"main": [[{"node": "Confirmar envío", "type": "main", "index": 0}]]}
+    "Webhook AnaLease": {
+      "main": [
+        [
+          {
+            "node": "Enviar con Outlook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar con Outlook": {
+      "main": [
+        [
+          {
+            "node": "Confirmar envío",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
   "settings": {
     "executionOrder": "v1",

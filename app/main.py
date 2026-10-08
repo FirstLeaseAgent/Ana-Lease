@@ -26,6 +26,7 @@ from .document_routes import install as install_document_routes
 from . import catalog
 from .catalog_routes import install as install_catalog_routes
 from . import shareholders
+from .notifications import deliver as deliver_notice
 
 logger = logging.getLogger(__name__)
 
@@ -453,7 +454,7 @@ def undo_last_answer(intake_id: UUID, request: Request):
             conn.execute("INSERT INTO capture_turns(intake_id,request_id,user_message,status,response_json,audit_json) VALUES(%s,%s,%s,'complete',%s,%s)", (intake_id,uuid4(),'Deshacer última respuesta',psycopg.types.json.Jsonb(response),psycopg.types.json.Jsonb([reversal])))
     return response
 
-install_document_routes(app,pool,owner,intake_for_owner,conversation_people,conversation_enabled_for)
+install_document_routes(app,pool,owner,intake_for_owner,conversation_people,conversation_enabled_for,lambda intake_id:deliver_notice(pool,intake_id))
 
 install_catalog_routes(app,pool,owner)
 
@@ -481,3 +482,6 @@ def complete_participant_list(intake_id,request,message):
             response={'reply':resume_reply(updated,active),'active_id':active,'stage':capture_stage(updated,active),'progress':capture_progress(updated),'authorization_links':[]}
             conn.execute("INSERT INTO capture_turns(intake_id,request_id,user_message,status,response_json,audit_json) VALUES(%s,%s,%s,'complete',%s,%s)",(intake_id,uuid4(),message,Jsonb(response),Jsonb(audit)))
     return response
+
+from .followup import install as install_followup
+install_followup(app,pool,owner,conversation_people,lambda intake_id:deliver_notice(pool,intake_id))

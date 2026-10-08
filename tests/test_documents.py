@@ -290,6 +290,22 @@ class DocumentTests(unittest.TestCase):
         checklist=routes['/intakes/{intake_id}/documents'](INTAKE,None)
         self.assertEqual(checklist['status'],'submitted');self.assertFalse(checklist['upload_available'])
 
+    def test_submitted_owner_can_supply_missing_file_and_cannot_replace_received(self):
+        routes,conn=self.routes(authorize=lambda *args,**kwargs:{'status':'submitted'})
+        class Request:
+            async def stream(self):yield b'%PDF-1.4\n'
+        with patch.object(d,'upload_configured',return_value=True),patch.object(d,'store_in_sharepoint',return_value='late-file') as store:
+            self.assertTrue(routes['/intakes/{intake_id}/documents'](INTAKE,None)['upload_available'])
+            out=asyncio.run(routes['/intakes/{intake_id}/documents/{participant_id}/{code}/uploads/{upload_id}'](INTAKE,REP,'documento_persona',UPLOAD,Request()))
+            self.assertEqual(out['status'],'received')
+            store.assert_called_once()
+        conn.states=[{'participant_id':AVAL,'document_code':'documento_persona','status':'received','upload_id':UPLOAD}]
+        with patch.object(d,'store_in_sharepoint') as store:
+            with self.assertRaises(HTTPException) as error:
+                asyncio.run(routes['/intakes/{intake_id}/documents/{participant_id}/{code}/uploads/{upload_id}'](INTAKE,REP,'documento_persona',UPLOAD,Request()))
+            self.assertEqual(error.exception.status_code,409)
+            store.assert_not_called()
+
     def test_finalize_checks_ownership_before_reading_or_writing(self):
         def deny(*args,**kwargs):raise HTTPException(404,'Captura no encontrada')
         routes,conn=self.routes(authorize=deny)

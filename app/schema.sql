@@ -140,3 +140,11 @@ CREATE TABLE IF NOT EXISTS capture_catalogs (
   body jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS submission_notifications (
+  intake_id uuid PRIMARY KEY REFERENCES intakes(id),
+  required_missing integer NOT NULL,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sending','sent','failed')),
+  attempts integer NOT NULL DEFAULT 0,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);

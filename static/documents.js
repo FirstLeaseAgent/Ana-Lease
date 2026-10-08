@@ -20,7 +20,7 @@ async function loadDocuments(){
   const required=result.documents.filter(r=>r.required&&r.applicable!==false).length;
   setCaptureProgress(submitted?'Solicitud recibida · documentos':'Documentos obligatorios',Math.max(0,required-result.required_missing),required,submitted?'Recibida · pendiente de revisión':'Datos completos → Documentos → Finalización');
   if(submitted){state.step='submitted';form.hidden=true;documentPanel.className='documents-complete';}else documentPanel.className='';
-  if(!submitted&&!result.upload_available)documentPanel.append(docElement('p','La carga de archivos estará disponible en breve. Puedes revisar la lista y dejar pendientes.'));
+  if(!result.upload_available)documentPanel.append(docElement('p','La carga de archivos estará disponible en breve. Puedes revisar la lista y dejar pendientes.'));
   const options=docElement('div');options.className='document-actions';
   for(const role of ['aval','representante'])options.append(docButton('Agregar otro '+role,async()=>{const out=await api('/intakes/'+state.intake+'/conversation','POST',{request_id:crypto.randomUUID(),message:'Quiero agregar un '+role,question:state.currentQuestion});showConversation(out);}));
   if(!submitted)documentPanel.append(options);
@@ -33,12 +33,12 @@ async function loadDocuments(){
     const labels={received:'Recibido · pendiente de revisión',pending:'Pendiente',deferred:'Pendiente · lo entregarás después',not_applicable:'No aplica'};
     card.append(docElement('p',labels[item.status]));
     const base='/intakes/'+state.intake+'/documents/'+item.participant_id+'/'+item.code;
-    if(!submitted&&item.applicable===null){
+    if(item.applicable===null){
       const label=docElement('label',item.dependency_question||'Indica '+item.dependency_field.replace(/_/g,' ')+':');
       const choices=item.dependency_options||[];const input=docElement(choices.length?'select':'input');if(choices.length)for(const value of ['',...choices]){const option=docElement('option',value||'Selecciona una opción');option.value=value;input.append(option);}label.append(input);card.append(label);
       card.append(docButton('Guardar dato',async()=>{if(!input.value.trim())throw Error('Indica el estado civil');await api('/intakes/'+state.intake+'/documents/dependency','POST',{participant_id:item.participant_id,field:item.dependency_field,value:input.value.trim()});await loadDocuments();}));
     }
-    if(!submitted&&item.applicable===true){
+    if(item.applicable===true&&(!submitted||item.status!=='received')){
       let selectedFile=null;
       const file=docElement('input');file.type='file';file.accept='.pdf,.jpg,.jpeg,.png';file.hidden=true;file.setAttribute('aria-label','Seleccionar '+item.label);file.disabled=!result.upload_available;
       const drop=docElement('div');drop.className='drop-zone';
@@ -75,7 +75,7 @@ async function loadDocuments(){
   }
   if(!submitted){
     documentPanel.append(docElement('p',result.required_missing?'Documentos requeridos pendientes: '+result.required_missing+'. Puedes finalizar ahora; el equipo podrá dar seguimiento a los faltantes.':'Los documentos obligatorios están recibidos. Los opcionales no impiden finalizar.'));
-    documentPanel.append(docElement('p','Al finalizar se enviará la solicitud a revisión y se cerrará la captura. Los documentos faltantes seguirán pendientes; la solicitud todavía no está aprobada.'));
+    documentPanel.append(docElement('p','Al finalizar se enviará la solicitud a revisión y se cerrará la captura de datos. Podrás volver para subir documentos faltantes. Los documentos faltantes seguirán pendientes; la solicitud todavía no está aprobada.'));
     const finish=docButton('Finalizar solicitud',async()=>{await api('/intakes/'+state.intake+'/finalize','POST',{});await loadDocuments();});
     documentPanel.append(finish);
   }
