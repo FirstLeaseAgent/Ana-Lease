@@ -91,11 +91,12 @@ class ConversationInput(BaseModel):
 
 def conversation_enabled_for(conn, user_id):
     enabled = os.environ.get('CAPTURE_AI_ENABLED', '').lower() == 'true'
+    all_emails = os.environ.get('CAPTURE_AI_ALL_EMAILS', '').lower() == 'true'
     allowed = {s.strip().lower() for s in os.environ.get('CAPTURE_AI_ALLOWED_EMAILS', '').split(',') if s.strip()}
-    if not enabled or not allowed:
+    if not enabled or (not all_emails and not allowed):
         return False
     user = conn.execute('SELECT email FROM users WHERE id=%s', (user_id,)).fetchone()
-    return bool(user and user['email'].lower() in allowed)
+    return bool(user and (all_emails or user['email'].lower() in allowed))
 
 def conversation_people(conn, intake_id):
     people = conn.execute("SELECT id,role,subject_type,rfc,company_id,subject_type_confirmed FROM participants WHERE intake_id=%s ORDER BY CASE role WHEN 'solicitante' THEN 0 WHEN 'contacto' THEN 1 WHEN 'representante' THEN 2 WHEN 'accionista' THEN 3 ELSE 4 END,created_at,id", (intake_id,)).fetchall()

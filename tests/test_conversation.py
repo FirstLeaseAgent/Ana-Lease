@@ -334,6 +334,20 @@ class ConversationTest(unittest.TestCase):
         with patch.dict(os.environ,{'CAPTURE_AI_ENABLED':'false','CAPTURE_AI_ALLOWED_EMAILS':'pilot@example.test'}):
             self.assertFalse(main.conversation_enabled_for(Conn(),'id'))
 
+    def test_all_emails_mode_still_requires_existing_user_and_enabled_engine(self):
+        class Conn:
+            user = {'email': 'new-client@example.test'}
+            def execute(self,*args):return self
+            def fetchone(self):return self.user
+        conn=Conn()
+        with patch.dict(os.environ,{'CAPTURE_AI_ENABLED':'true','CAPTURE_AI_ALL_EMAILS':'true','CAPTURE_AI_ALLOWED_EMAILS':''}):
+            self.assertTrue(main.conversation_enabled_for(conn,'id'))
+            conn.user=None
+            self.assertFalse(main.conversation_enabled_for(conn,'id'))
+        conn.user={'email':'new-client@example.test'}
+        with patch.dict(os.environ,{'CAPTURE_AI_ENABLED':'false','CAPTURE_AI_ALL_EMAILS':'true'}):
+            self.assertFalse(main.conversation_enabled_for(conn,'id'))
+
     def test_retried_completed_turn_does_not_call_model_or_save_again(self):
         response={'reply':'Continuamos','active_id':None,'authorization_links':[]}
         class Conn:
