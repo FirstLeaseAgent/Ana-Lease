@@ -515,3 +515,10 @@ install_followup(app,pool,owner,conversation_people,lambda intake_id:deliver_not
 
 from .contact import install as install_contact
 install_contact(app,pool,owner,digest,client_ip)
+
+from .quotes import install as install_quotes
+install_quotes(app,pool,digest,client_ip)
+
+@app.get('/quotes.js')
+def quotes_javascript():
+    return Response(Path(__file__).resolve().parent.parent.joinpath('static/quotes.js').read_text(),media_type='application/javascript')

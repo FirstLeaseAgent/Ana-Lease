@@ -180,3 +180,13 @@ CREATE TABLE IF NOT EXISTS capture_pending_fields (
   FOREIGN KEY(participant_id,intake_id) REFERENCES participants(id,intake_id)
 );
 CREATE INDEX IF NOT EXISTS pending_fields_intake ON capture_pending_fields(intake_id);
+
+CREATE TABLE IF NOT EXISTS quote_dispatches (
+  id uuid PRIMARY KEY,
+  payload_hash text NOT NULL,
+  ip_hash text NOT NULL,
+  status text NOT NULL CHECK(status IN ('processing','ready','unconfirmed')),
+  pdf bytea,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS quote_dispatches_created ON quote_dispatches(created_at);

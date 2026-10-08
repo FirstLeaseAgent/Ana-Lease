@@ -8,7 +8,7 @@
   <section id="welcome" class="welcome" aria-label="Bienvenida a AnaLease">
     <header class="welcome-topbar"><img class="brand-logo" src="/firstlease-logo.png" alt="First Lease"><span class="eyebrow">Portal de clientes</span></header>
     <div class="welcome-hero">
-      <div class="welcome-copy"><span class="pill">A tu ritmo, con nuestro equipo</span><h1>Tu próximo paso<br>empieza aquí.</h1><p class="welcome-lead">Solicitar con First Lease es más sencillo.</p><p>AnaLease es nuestro asistente para facilitar tu solicitud. Te guía para completar tus datos y compartir documentos, paso a paso y en un solo lugar.</p><p>En cualquier momento puedes pedir que nuestro equipo te contacte para ayudarte.</p><div class="welcome-actions"><button id="start-application" type="button">Comenzar mi solicitud <span aria-hidden="true">↗</span></button><button class="secondary" type="button" data-contact>Quiero que me contacten</button></div><small>¿Ya comenzaste? Entra con tu correo para continuar.</small></div>
+      <div class="welcome-copy"><span class="pill">A tu ritmo, con nuestro equipo</span><h1>Tu próximo paso<br>empieza aquí.</h1><p class="welcome-lead">Solicitar con First Lease es más sencillo.</p><p>AnaLease es nuestro asistente para facilitar tu solicitud. Te guía para completar tus datos y compartir documentos, paso a paso y en un solo lugar.</p><p>En cualquier momento puedes pedir que nuestro equipo te contacte para ayudarte.</p><div class="welcome-actions"><button id="start-quote" type="button">Cotizar <span aria-hidden="true">↗</span></button><button id="start-application" type="button">Comenzar mi solicitud <span aria-hidden="true">↗</span></button><button class="secondary" type="button" data-contact>Quiero que me contacten</button></div><small>¿Ya comenzaste? Entra con tu correo para continuar.</small></div>
       <div class="welcome-visual"><img src="/welcome-cars.webp" alt="Dos automóviles modernos sin marcas en un entorno contemporáneo" fetchpriority="high"><div class="welcome-caption"><span>FIRST LEASE</span><strong>Avanza con confianza.</strong></div></div>
     </div>
     <ol class="welcome-steps"><li><span>01</span><div><strong>Accede de forma segura</strong><p>Solo necesitas tu correo y un código de acceso.</p></div></li><li><span>02</span><div><strong>Completa a tu ritmo</strong><p>Tu avance queda guardado para continuar después.</p></div></li><li><span>03</span><div><strong>Cuenta con nosotros</strong><p>Solicita contacto cuando necesites apoyo.</p></div></li></ol>
@@ -24,10 +24,24 @@
     <p id="notice" role="status"></p>
   </main></div>
   <section id="exit-screen" class="exit-screen" hidden aria-labelledby="exit-title"><img class="brand-logo" src="/firstlease-logo.png" alt="First Lease"><span class="pill">Nos vemos pronto</span><h1 id="exit-title">Puedes continuar cuando quieras.</h1><p>Tu sesión se cerró. El avance que ya registraste queda guardado.</p><p>Puedes retomar tu solicitud en cualquier momento ingresando a esta misma liga de registro, con tu correo y el RFC de la solicitud.</p><a class="return-link" href="/">Volver a la liga de registro ↗</a></section>
+  <dialog id="quote-dialog" class="contact-dialog quote-dialog" aria-labelledby="quote-title">
+    <form id="quote-form"><p class="eyebrow">Tu próxima inversión</p><h2 id="quote-title">Cotiza con First Lease.</h2><p>Cuéntanos qué activo necesitas. Recibirás un PDF con todos los plazos disponibles.</p>
+      <label for="quote-name">Nombre o razón social</label><input id="quote-name" autocomplete="name" minlength="2" maxlength="120" required>
+      <label for="quote-phone">Teléfono con lada</label><input id="quote-phone" type="tel" autocomplete="tel" maxlength="35" required>
+      <label for="quote-asset">Activo que deseas cotizar</label><input id="quote-asset" minlength="2" maxlength="160" placeholder="Ej. Camioneta modelo 2026" required>
+      <label for="quote-value">Valor del activo en pesos</label><input id="quote-value" inputmode="decimal" maxlength="60" placeholder="Ej. 500,000" required>
+      <label for="quote-down">Enganche: entre 10% y 40%</label><input id="quote-down" maxlength="60" placeholder="Ej. 20%, 0.2 o 100 mil pesos" required>
+      <p class="contact-consent">Puedes indicar el enganche en porcentaje o en pesos. Verás la interpretación antes de confirmar.</p>
+      <p id="quote-preview" class="quote-preview" hidden></p><p id="quote-status" role="status"></p>
+      <a id="quote-download" class="return-link" hidden>Descargar cotización PDF ↗</a>
+      <div class="contact-actions"><button id="quote-submit" type="submit">Revisar cotización</button><button id="quote-back" class="secondary" type="button">Volver</button><button id="quote-contact" class="secondary" type="button">Quiero que me contacten</button></div>
+    </form>
+  </dialog>
   <dialog id="contact-dialog" class="contact-dialog" aria-labelledby="contact-title" aria-describedby="contact-description">
     <form id="contact-form"><p class="eyebrow">Estamos para ayudarte</p><h2 id="contact-title">Hablemos de tu solicitud.</h2><p id="contact-description">Déjanos tu nombre y teléfono. El equipo de First Lease se pondrá en contacto contigo.</p><label for="contact-name">Nombre de la persona</label><input id="contact-name" name="name" autocomplete="name" maxlength="120" minlength="2" required><label for="contact-phone">Teléfono con lada</label><input id="contact-phone" name="phone" type="tel" autocomplete="tel" inputmode="tel" maxlength="35" placeholder="Ej. 55 1234 5678" required><p class="contact-consent">Al enviar, solicitas que First Lease te contacte por teléfono para ayudarte con tu solicitud.</p><p id="contact-status" role="status"></p><div class="contact-actions"><button id="send-contact" type="submit">Solicitar contacto</button><button id="cancel-contact" class="secondary" type="button">Volver</button></div></form>
   </dialog>
   <script src="/app.js" defer></script>
   <script src="/documents.js" defer></script>
+  <script src="/quotes.js" defer></script>
 </body>
 </html>
