@@ -22,9 +22,9 @@
       "parameters": {
         "resource": "message",
         "operation": "send",
-        "toRecipients": "={{ $json.body.event === 'submitted' ? 'aortega@firstlease.com.mx' : $json.body.email }}",
-        "subject": "={{ $json.body.event === 'submitted' ? 'AnaLease · Solicitud recibida' : 'Tu código para AnaLease' }}",
-        "bodyContent": "={{ $json.body.event === 'submitted' ? 'AnaLease recibió una solicitud. Documentos requeridos pendientes: ' + $json.body.required_missing + '. Revisa la información y la conversación en: https://analease-captura-web.onrender.com/seguimiento?solicitud=' + $json.body.intake_id : 'Tu código para continuar en AnaLease es ' + $json.body.code + '. Caduca en 10 minutos.' }}",
+        "toRecipients": "={{ ['submitted', 'contact_requested'].includes($json.body.event) ? 'aortega@firstlease.com.mx' : $json.body.email }}",
+        "subject": "={{ $json.body.event === 'contact_requested' ? 'AnaLease · Solicitud de contacto' : ($json.body.event === 'submitted' ? 'AnaLease · Solicitud recibida' : 'Tu código para AnaLease') }}",
+        "bodyContent": "={{ $json.body.event === 'contact_requested' ? 'Una persona solicitó que First Lease la contacte desde el portal AnaLease.\\n\\nNombre: ' + $json.body.name + '\\nTeléfono: ' + $json.body.phone + '\\n\\nSeguimiento: https://analease-captura-web.onrender.com/seguimiento?contacto=' + $json.body.contact_id : ($json.body.event === 'submitted' ? 'AnaLease recibió una solicitud. Documentos requeridos pendientes: ' + $json.body.required_missing + '. Revisa la información y la conversación en: https://analease-captura-web.onrender.com/seguimiento?solicitud=' + $json.body.intake_id : 'Tu código para continuar en AnaLease es ' + $json.body.code + '. Caduca en 10 minutos.') }}",
         "additionalFields": {
           "bodyContentType": "Text",
           "saveToSentItems": false

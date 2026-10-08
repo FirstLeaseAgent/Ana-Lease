@@ -148,3 +148,19 @@ CREATE TABLE IF NOT EXISTS submission_notifications (
   attempts integer NOT NULL DEFAULT 0,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS contact_requests (
+  id uuid PRIMARY KEY,
+  name text NOT NULL,
+  phone text NOT NULL,
+  phone_hash text NOT NULL,
+  ip_hash text NOT NULL,
+  owner_id uuid REFERENCES users(id),
+  intake_id uuid REFERENCES intakes(id),
+  notification_status text NOT NULL DEFAULT 'pending' CHECK (notification_status IN ('pending','sending','sent','failed')),
+  attempts integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS contact_phone_created ON contact_requests(phone_hash,created_at DESC);
+CREATE INDEX IF NOT EXISTS contact_ip_created ON contact_requests(ip_hash,created_at DESC);

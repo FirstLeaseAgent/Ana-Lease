@@ -172,6 +172,10 @@ def brand_logo():
 def documents_javascript():
     return Response(Path(__file__).resolve().parent.parent.joinpath('static/documents.js').read_text(),media_type='application/javascript')
 
+@app.get('/welcome-cars.webp')
+def welcome_cars():
+    return Response(Path(__file__).resolve().parent.parent.joinpath('static/welcome-cars.webp').read_bytes(), media_type='image/webp')
+
 @app.post('/auth/start', status_code=202)
 def auth_start(body: EmailInput, request: Request):
     email = str(body.email).strip().lower()
@@ -485,3 +489,6 @@ def complete_participant_list(intake_id,request,message):
 
 from .followup import install as install_followup
 install_followup(app,pool,owner,conversation_people,lambda intake_id:deliver_notice(pool,intake_id))
+
+from .contact import install as install_contact
+install_contact(app,pool,owner,digest,client_ip)
