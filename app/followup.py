@@ -41,7 +41,7 @@ def install(app,pool,owner,conversation_people,notify=None):
                 applicant=next((p for p in people.values() if p['role']=='solicitante'),{})
                 answers=applicant.get('answers',{})
                 docs=documents(conn,row['id'],people)
-                result.append({**row,'name':answers.get('razon_social') or answers.get('nombre') or 'Sin nombre capturado','required_missing':d.required_missing(docs)})
+                result.append({**row,'name':answers.get('razon_social') or answers.get('nombre') or 'Sin nombre capturado','required_missing':d.required_missing(docs),'pending_data':sum(len(p.get('pending_fields',[])) for p in people.values())})
         return {'intakes':result,'has_more':len(rows)>50}
 
     @app.get('/admin/intakes/{intake_id}')
@@ -54,7 +54,7 @@ def install(app,pool,owner,conversation_people,notify=None):
             docs=documents(conn,intake_id,people)
             turns=conn.execute("SELECT user_message,response_json,created_at FROM capture_turns WHERE intake_id=%s AND status='complete' ORDER BY created_at,request_id",(intake_id,)).fetchall()
             events=conn.execute('SELECT action,document_code,details,created_at FROM document_events WHERE intake_id=%s ORDER BY created_at,id',(intake_id,)).fetchall()
-        return {'intake':intake,'participants':[{'id':p['id'],'role':p['role'],'subject_type':p['subject_type'],'rfc':p['rfc'],'answers':p['answers']} for p in people.values()],
+        return {'intake':intake,'participants':[{'id':p['id'],'role':p['role'],'subject_type':p['subject_type'],'rfc':p['rfc'],'answers':p['answers'],'pending_fields':p.get('pending_fields',[])} for p in people.values()],
                 'documents':docs,'required_missing':d.required_missing(docs),'conversation':turns,'events':events}
 
     @app.post('/admin/intakes/{intake_id}/notification/retry')

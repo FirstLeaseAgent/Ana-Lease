@@ -12,6 +12,7 @@ from .catalog import fields_for, field_rows, question_for, reuse_source, validat
 from .memory import model_memory, relations_from_actions, identity_members
 from . import shareholders
 from . import handoffs
+from . import pending as pending_data
 
 MAX_ACTIONS = 16
 COMMON_FIELDS = {'nombre', 'correo_contacto', 'telefono', 'rfc', 'curp'}
@@ -23,6 +24,7 @@ ORDER = {
     'accionista': ['rfc','nombre','razon_social','curp','porcentaje_participacion'],
 }
 QUESTIONS = {
+    'tipo_persona': '¿Es persona física o persona moral?',
     'rfc': '¿Cuál es su RFC?', 'nombre': '¿Cuál es su nombre completo?',
     'razon_social': '¿Cuál es la razón social?', 'nombre_comercial': '¿Cuál es el nombre comercial?',
     'actividad': '¿A qué se dedica?', 'pagina_web': '¿Cuál es su página web?',
@@ -42,12 +44,15 @@ class InvalidProposal(ValueError):
 
 
 def missing(person):
+    deferred=set(person.get('pending_fields', []))
+    if 'rfc' in deferred and person['role'] in ('aval','accionista') and not person.get('subject_type_confirmed',True):
+        return ['tipo_persona']
     fields = fields_for(person)
     if person['role'] in ('aval', 'representante', 'accionista') and not person.get('rfc'):
         fields.add('rfc')
     rows=field_rows(person)
     order=((['rfc'] if person['role'] in ('aval','representante','accionista') else [])+[r['code'] for r in rows]) if rows is not None else ORDER[person['role']]
-    return [f for f in order if f in fields and not (
+    return [f for f in order if f in fields and f not in deferred and not (
         person.get('rfc') if f == 'rfc' else person['answers'].get(f))]
 
 
@@ -76,6 +81,7 @@ def context_for(people, preferred=None, session_email=None):
     context = {'version': 1, 'active_participant_id': active, 'participants': [
         {'id': pid, 'role': p['role'], 'subject_type': p['subject_type'], 'hint': person_hint(p),
          'known_fields': sorted(list(p['answers']) + (['rfc'] if p.get('rfc') else [])),
+         'pending_fields': sorted(p.get('pending_fields',[])),
          'missing_fields': missing(p)} for pid, p in people.items()
     ]}
     context['capture_schema']=[{'participant_id':pid,'fields':[{'code':r['code'],'question':r['question'],'type':r['type'],'options':r['options']} for r in field_rows(p if p.get('catalog') is not None else dict(p,catalog=baseline())) or []]} for pid,p in people.items()]
@@ -313,6 +319,14 @@ def identity_audit(people, audit, message):
 
 def local_reference(people,message,preferred,history,relations=None):
     active=active_person(people,preferred)
+    if active:
+        field=missing(people[active])[0]
+        if field=='tipo_persona':
+            subject=pending_data.subject_type(message)
+            return {'reply':'Continuemos con sus datos.' if subject else 'Para pedir los datos correctos, indica si es persona física o moral. Si necesitas ayuda, pulsa «Quiero que me contacten».',
+                    'actions':[shareholders.action('set_subject_type',target=active,field=field,value=subject,message=message)] if subject else []}
+        if pending_data.unavailable(message,field):
+            return {'reply':'El dato quedará pendiente.','actions':[shareholders.action('defer_field',target=active,field=field,message=message)]}
     stage=capture_stage(people,preferred)
     list_role={'shareholders':'accionista','guarantors':'aval'}.get(stage) if not active else None
     if list_role and shareholders.list_finished(message):
@@ -456,7 +470,9 @@ def local_reference(people,message,preferred,history,relations=None):
 def capture_progress(people):
     total=sum(len(fields_for(p))+(p['role']!='contacto') for p in people.values())
     completed=sum(sum(bool(p['answers'].get(f)) for f in fields_for(p))+bool(p.get('rfc')) for p in people.values())
-    return {'completed':completed,'total':total,'label':'Captura de datos'}
+    deferred=sum(len(set(p.get('pending_fields',[])) & (fields_for(p)|({'rfc'} if p['role']!='contacto' else set()))) for p in people.values())
+    return {'completed':completed+deferred,'total':total,**({'pending':deferred,'provided':completed} if deferred else {}),
+            'label':'Captura de datos'+(f' · {deferred} datos pendientes' if deferred else '')}
 
 
 def resume_reply(people, preferred=None):
@@ -509,6 +525,9 @@ def reply_after_proposal(proposal, people, audit, preferred=None):
     # The model interprets intent; committed fields determine the next question.
     # Keep free-form clarifications when no capture action was accepted.
     if audit:
+        deferred=next((a for a in audit if a['type']=='defer_field'),None)
+        if deferred:
+            return 'No proporcionado: el dato queda pendiente para seguimiento. Puedes pedir ayuda con «Quiero que me contacten».\n\n'+resume_reply(people,preferred)
         return resume_reply(people, preferred)
     active=active_person(people,preferred)
     if active:
@@ -548,6 +567,23 @@ def apply_proposal(people, proposal, message, preferred=None, session_email=None
         if not isinstance(evidence, str) or not evidence.strip() or evidence.casefold() not in message.casefold():
             raise InvalidProposal('El cambio no está respaldado por tu mensaje')
         kind = action['type']
+        if kind in ('defer_field','set_subject_type'):
+            target_id=action['target_id']
+            if target_id not in result or target_id!=active_person(result,preferred_id) or any(action[k] is not None for k in ('source_id','role')):
+                raise InvalidProposal('Solo se puede dejar pendiente la pregunta actual')
+            target=result[target_id];field=action['field']
+            if field!=missing(target)[0]:raise InvalidProposal('La pregunta cambió; recarga para continuar')
+            if kind=='set_subject_type':
+                if field!='tipo_persona' or action['value']!=pending_data.subject_type(message):raise InvalidProposal('Indica persona física o persona moral')
+                subject=action['value']
+                if subject not in ('PF','PM') or any(f not in fields_for(target,subject) for f in target['answers']):raise InvalidProposal('Revisa el tipo de persona con nuestro equipo')
+                target['subject_type']=subject;target['subject_type_confirmed']=True
+            else:
+                if field=='tipo_persona' or action['value'] is not None or not pending_data.unavailable(message,field):raise InvalidProposal('Confirma que no tienes el dato de la pregunta actual')
+                target['pending_fields']=sorted(set(target.get('pending_fields',[]))|{field})
+            audit.append({'type':kind,'target_id':target_id,'field':field,'evidence':evidence})
+            preferred_id=target_id
+            continue
         if kind in ('finish_shareholders','finish_guarantors'):
             company=shareholders.applicant(result)
             if (any(action[k] is not None for k in ('source_id','role','field','value')) or not company or
@@ -585,7 +621,7 @@ def apply_proposal(people, proposal, message, preferred=None, session_email=None
             if role == 'aval' and sum(p['role'] == 'aval' for p in result.values()) >= 3:
                 raise InvalidProposal('Máximo tres avales')
             new_id = str(uuid4())
-            result[new_id] = {'id': new_id, 'role': role, 'subject_type': 'PF', 'rfc': None, 'answers': {}}
+            result[new_id] = {'id': new_id, 'role': role, 'subject_type': 'PF', 'subject_type_confirmed':role=='representante', 'rfc': None, 'answers': {}}
             if role=='aval' and shareholders.applicant(result):shareholders.applicant(result)['guarantors_complete']=False
             if role=='accionista':
                 company=shareholders.applicant(result)
@@ -655,8 +691,10 @@ def apply_proposal(people, proposal, message, preferred=None, session_email=None
         # Equal values are idempotent; a repeated reference must not duplicate data.
         if field == 'rfc':
             target['rfc'] = value
+            target['subject_type_confirmed']=True
         else:
             target['answers'][field] = value
+        if field in target.get('pending_fields',[]):target['pending_fields'].remove(field)
         audit.append({'type': kind, 'target_id': target_id, 'source_id': source_id,
                       'field': field, 'evidence': evidence})
         preferred_id = target_id

@@ -1,6 +1,6 @@
 const documentPanel=document.querySelector('#documents');
 const fileAttempts=new Map();
-let documentUploadBusy=false;
+let documentUploadBusy=false,documentActionBusy=false;
 function sendDocument(path,file,onProgress){return new Promise((resolve,reject)=>{
   const xhr=new XMLHttpRequest();xhr.open('PUT',path);xhr.withCredentials=true;xhr.timeout=75000;
   xhr.setRequestHeader('Content-Type',file.type||'application/octet-stream');
@@ -11,14 +11,15 @@ function sendDocument(path,file,onProgress){return new Promise((resolve,reject)=
   xhr.send(file);
 });}
 function docElement(tag,text){const el=document.createElement(tag);if(text)el.textContent=text;return el;}
-function docButton(text,action){const b=docElement('button',text);b.type='button';b.addEventListener('click',async()=>{if(documentUploadBusy)return;b.disabled=true;status('');try{await action();}catch(error){status(error.message);}finally{b.disabled=false;}});return b;}
+function docButton(text,action){const b=docElement('button',text);b.type='button';b.addEventListener('click',async()=>{if(documentUploadBusy||documentActionBusy)return;documentActionBusy=true;b.disabled=true;status('');try{await action();}catch(error){status(error.message);}finally{documentActionBusy=false;b.disabled=false;}});return b;}
 async function loadDocuments(){
   const result=await api('/intakes/'+state.intake+'/documents');
   documentPanel.replaceChildren();documentPanel.hidden=false;
   documentPanel.append(docElement('h2','Documentos'),docElement('p',result.message));
   const submitted=result.status==='submitted';
+  if(result.pending_data)documentPanel.append(docElement('p','Datos no proporcionados: '+result.pending_data+'. Quedan pendientes para seguimiento del equipo.'));
   const required=result.documents.filter(r=>r.required&&r.applicable!==false).length;
-  setCaptureProgress(submitted?'Solicitud recibida · documentos':'Documentos obligatorios',Math.max(0,required-result.required_missing),required,submitted?'Recibida · pendiente de revisión':'Datos completos → Documentos → Finalización');
+  setCaptureProgress(submitted?'Solicitud recibida · documentos':'Documentos obligatorios',Math.max(0,required-result.required_missing),required,submitted?'Recibida · pendiente de revisión':(result.pending_data?'Captura recorrida · '+result.pending_data+' datos pendientes → Documentos':'Datos completos → Documentos → Finalización'));
   if(submitted){state.step='submitted';form.hidden=true;documentPanel.className='documents-complete';}else documentPanel.className='';
   if(!result.upload_available)documentPanel.append(docElement('p','La carga de archivos estará disponible en breve. Puedes revisar la lista y dejar pendientes.'));
   const options=docElement('div');options.className='document-actions';

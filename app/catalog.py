@@ -60,6 +60,10 @@ def reuse_source(person,code):
     return next((r['reuse_from'] for r in rows or [] if r['code']==code),'') if rows is not None else ('razon_social' if code=='nombre_comercial' else '')
 
 def validate_value(person,code,value):
+    from .pending import unavailable
+    if unavailable(value,code):raise ValueError('Ese dato no se guardó. Escribe «no lo tengo» para dejarlo pendiente o pide que te contacten.')
+    if code=='curp' and len(value.strip())!=18:
+        raise ValueError(f'La CURP debe tener 18 caracteres; escribiste {len(value.strip())}. Rectifícala o escribe «no lo tengo» para continuar. También puedes pedir que te contacten.')
     if person['role']=='accionista':
         if code=='porcentaje_participacion':shareholders.percentage(value)
         if code=='curp' and not shareholders.CURP.fullmatch(value.upper()):

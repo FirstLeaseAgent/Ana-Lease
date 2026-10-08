@@ -64,7 +64,7 @@ def install(app, pool, owner, intake_for_owner, conversation_people, enabled, no
         rows=d.grouped_requirements(rows,people,states)
         missing=d.required_missing(rows)
         submitted=intake['status']=='submitted'
-        return {'documents':rows,'status':intake['status'],'required_missing':missing,'upload_available':d.upload_configured(),
+        return {'documents':rows,'status':intake['status'],'required_missing':missing,'pending_data':sum(len(p.get('pending_fields',[])) for p in people.values()),'upload_available':d.upload_configured(),
                 'message':('Solicitud recibida. Tus datos y archivos quedaron guardados. Puedes subir aquí los documentos pendientes cuando los tengas. El equipo podrá dar seguimiento contigo. Esto no implica aprobación.' if submitted and missing
                            else 'Solicitud recibida. Tus datos y documentos quedaron guardados y pendientes de revisión. Esto no implica aprobación.' if submitted
                            else 'Los documentos obligatorios están recibidos. Ya puedes finalizar tu solicitud.' if not missing
@@ -99,7 +99,7 @@ def install(app, pool, owner, intake_for_owner, conversation_people, enabled, no
                 applicant=next(p for p in people.values() if p['role']=='solicitante')
                 conn.execute("UPDATE intakes SET status='submitted',updated_at=now() WHERE id=%s AND owner_id=%s",(intake_id,user_id))
                 event(conn,intake_id,user_id,applicant['id'],None,'finalize',{'recognition_started':False,
-                      'required_missing':missing,'pending_documents':pending})
+                      'required_missing':missing,'pending_documents':pending,'pending_fields':[{'participant_id':pid,'field_code':field,'status':'no_proporcionado'} for pid,p in people.items() for field in p.get('pending_fields',[])]})
         if notify:
             try:notify(intake_id)
             except Exception:logger.warning('Submission saved; notification remains pending for retry')

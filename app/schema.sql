@@ -45,6 +45,12 @@ ALTER TABLE participants DROP CONSTRAINT IF EXISTS participants_role_check;
 ALTER TABLE participants ADD CONSTRAINT participants_role_check
   CHECK (role IN ('solicitante','contacto','aval','representante','accionista'));
 ALTER TABLE participants ADD COLUMN IF NOT EXISTS company_id uuid;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='participants' AND column_name='subject_type_confirmed') THEN
+    ALTER TABLE participants ADD COLUMN subject_type_confirmed boolean NOT NULL DEFAULT true;
+    UPDATE participants SET subject_type_confirmed=false WHERE role IN ('aval','accionista') AND rfc IS NULL;
+  END IF;
+END $$;
 ALTER TABLE participants DROP CONSTRAINT IF EXISTS participants_company_fkey;
 ALTER TABLE participants ADD CONSTRAINT participants_company_fkey
   FOREIGN KEY (company_id,intake_id) REFERENCES participants(id,intake_id);
@@ -164,3 +170,13 @@ CREATE TABLE IF NOT EXISTS contact_requests (
 );
 CREATE INDEX IF NOT EXISTS contact_phone_created ON contact_requests(phone_hash,created_at DESC);
 CREATE INDEX IF NOT EXISTS contact_ip_created ON contact_requests(ip_hash,created_at DESC);
+
+CREATE TABLE IF NOT EXISTS capture_pending_fields (
+  intake_id uuid NOT NULL,
+  participant_id uuid NOT NULL,
+  field_code text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(participant_id,field_code),
+  FOREIGN KEY(participant_id,intake_id) REFERENCES participants(id,intake_id)
+);
+CREATE INDEX IF NOT EXISTS pending_fields_intake ON capture_pending_fields(intake_id);

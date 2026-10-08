@@ -26,6 +26,7 @@ from .document_routes import install as install_document_routes
 from . import catalog
 from .catalog_routes import install as install_catalog_routes
 from . import shareholders
+from .pending import unavailable
 from .notifications import deliver as deliver_notice
 
 logger = logging.getLogger(__name__)
@@ -97,11 +98,15 @@ def conversation_enabled_for(conn, user_id):
     return bool(user and user['email'].lower() in allowed)
 
 def conversation_people(conn, intake_id):
-    people = conn.execute("SELECT id,role,subject_type,rfc,company_id FROM participants WHERE intake_id=%s ORDER BY CASE role WHEN 'solicitante' THEN 0 WHEN 'contacto' THEN 1 WHEN 'representante' THEN 2 WHEN 'accionista' THEN 3 ELSE 4 END,created_at,id", (intake_id,)).fetchall()
+    people = conn.execute("SELECT id,role,subject_type,rfc,company_id,subject_type_confirmed FROM participants WHERE intake_id=%s ORDER BY CASE role WHEN 'solicitante' THEN 0 WHEN 'contacto' THEN 1 WHEN 'representante' THEN 2 WHEN 'accionista' THEN 3 ELSE 4 END,created_at,id", (intake_id,)).fetchall()
     result = {str(p['id']): dict(p, id=str(p['id']), answers={}) for p in people}
     for a in conn.execute('SELECT participant_id,field_code,value_json FROM answers WHERE intake_id=%s', (intake_id,)).fetchall():
         if isinstance(a['value_json'], str):
             result[str(a['participant_id'])]['answers'][a['field_code']] = a['value_json']
+    for row in conn.execute('SELECT participant_id,field_code FROM capture_pending_fields WHERE intake_id=%s',(intake_id,)).fetchall():
+        person=result.get(str(row['participant_id']))
+        if person and row['field_code'] not in person['answers'] and not (row['field_code']=='rfc' and person.get('rfc')):
+            person.setdefault('pending_fields',[]).append(row['field_code'])
     config=catalog.snapshot(conn,intake_id)
     controls=conn.execute('SELECT shareholders_enabled,shareholders_complete,guarantors_complete FROM intakes WHERE id=%s',(intake_id,)).fetchone() or {}
     for person in result.values():
@@ -271,6 +276,8 @@ def read_intake(intake_id: UUID, request: Request):
         intake = intake_for_owner(conn, intake_id, user_id)
         people = conn.execute("SELECT id,role,subject_type FROM participants WHERE intake_id=%s ORDER BY CASE role WHEN 'solicitante' THEN 0 WHEN 'contacto' THEN 1 WHEN 'representante' THEN 2 WHEN 'accionista' THEN 3 ELSE 4 END,created_at,id", (intake_id,)).fetchall()
         answers = conn.execute('SELECT participant_id,field_code FROM answers WHERE intake_id=%s', (intake_id,)).fetchall()
+        deferred=conn.execute('SELECT participant_id,field_code FROM capture_pending_fields WHERE intake_id=%s',(intake_id,)).fetchall()
+        answers += [dict(row,status='pending') for row in deferred]
         names = conn.execute("SELECT participant_id,value_json FROM answers WHERE intake_id=%s AND field_code IN ('nombre','razon_social')", (intake_id,)).fetchall()
         enabled = conversation_enabled_for(conn, user_id)
         configured_people=conversation_people(conn,intake_id)
@@ -329,6 +336,14 @@ def save_answer(intake_id: UUID, participant_id: UUID, body: AnswerInput, reques
             person=conversation_people(conn,intake_id).get(str(participant_id))
             if not person or body.field_code not in catalog.fields_for(person):
                 raise HTTPException(422, 'Campo no admitido')
+            if unavailable(body.value,body.field_code):
+                if person['answers'].get(body.field_code):raise HTTPException(409,'Ese dato ya está registrado')
+                expected=active_person({str(participant_id):person},str(participant_id))
+                from .conversation import missing
+                if not expected or missing(person)[0]!=body.field_code:raise HTTPException(409,'Solo puedes dejar pendiente la pregunta actual')
+                conn.execute('INSERT INTO capture_pending_fields(intake_id,participant_id,field_code) VALUES(%s,%s,%s) ON CONFLICT(participant_id,field_code) DO NOTHING',(intake_id,participant_id,body.field_code))
+                conn.execute('UPDATE intakes SET updated_at=now(),capture_version=capture_version+1 WHERE id=%s',(intake_id,))
+                return {'ok':True,'pending':True}
             try:catalog.validate_value(person,body.field_code,body.value.strip())
             except ValueError as exc:raise HTTPException(422,str(exc))
             if person['role']=='accionista':
@@ -339,6 +354,7 @@ def save_answer(intake_id: UUID, participant_id: UUID, body: AnswerInput, reques
                 try:shareholders.validate_people(updated)
                 except ValueError as exc:raise HTTPException(422,str(exc))
             conn.execute('INSERT INTO answers(intake_id,participant_id,field_code,value_json) VALUES(%s,%s,%s,%s) ON CONFLICT(participant_id,field_code) DO UPDATE SET value_json=EXCLUDED.value_json,updated_at=now()', (intake_id,participant_id,body.field_code,psycopg.types.json.Jsonb(body.value.strip())))
+            conn.execute('DELETE FROM capture_pending_fields WHERE intake_id=%s AND participant_id=%s AND field_code=%s',(intake_id,participant_id,body.field_code))
             conn.execute('UPDATE intakes SET updated_at=now(),capture_version=capture_version+1 WHERE id=%s', (intake_id,))
     return {'ok': True}
 
@@ -409,9 +425,14 @@ def converse(intake_id: UUID, body: ConversationInput, request: Request):
                     raise HTTPException(404, 'Conversación no disponible')
                 for pid, person in updated.items():
                     if pid not in people:
-                        conn.execute('INSERT INTO participants(id,intake_id,role,subject_type,rfc,company_id) VALUES(%s,%s,%s,%s,%s,%s)', (pid,intake_id,person['role'],person['subject_type'],person['rfc'],person.get('company_id')))
-                    elif (person['rfc'],person['subject_type']) != (people[pid]['rfc'],people[pid]['subject_type']):
-                        conn.execute('UPDATE participants SET rfc=%s,subject_type=%s WHERE id=%s AND intake_id=%s', (person['rfc'],person['subject_type'],pid,intake_id))
+                        conn.execute('INSERT INTO participants(id,intake_id,role,subject_type,rfc,subject_type_confirmed,company_id) VALUES(%s,%s,%s,%s,%s,%s,%s)', (pid,intake_id,person['role'],person['subject_type'],person['rfc'],person.get('subject_type_confirmed',True),person.get('company_id')))
+                    elif (person['rfc'],person['subject_type'],person.get('subject_type_confirmed',True)) != (people[pid]['rfc'],people[pid]['subject_type'],people[pid].get('subject_type_confirmed',True)):
+                        conn.execute('UPDATE participants SET rfc=%s,subject_type=%s,subject_type_confirmed=%s WHERE id=%s AND intake_id=%s', (person['rfc'],person['subject_type'],person.get('subject_type_confirmed',True),pid,intake_id))
+                    before=set(people.get(pid,{}).get('pending_fields',[]));after=set(person.get('pending_fields',[]))
+                    for code in after-before:
+                        conn.execute('INSERT INTO capture_pending_fields(intake_id,participant_id,field_code) VALUES(%s,%s,%s) ON CONFLICT(participant_id,field_code) DO NOTHING',(intake_id,pid,code))
+                    for code in before-after:
+                        conn.execute('DELETE FROM capture_pending_fields WHERE intake_id=%s AND participant_id=%s AND field_code=%s',(intake_id,pid,code))
                     for code, value in person['answers'].items():
                         if value != people.get(pid, {}).get('answers', {}).get(code):
                             conn.execute('INSERT INTO answers(intake_id,participant_id,field_code,value_json) VALUES(%s,%s,%s,%s)', (intake_id,pid,code,psycopg.types.json.Jsonb(value)))
@@ -442,19 +463,20 @@ def undo_last_answer(intake_id: UUID, request: Request):
             turn = conn.execute("SELECT * FROM capture_turns WHERE intake_id=%s AND status='complete' ORDER BY created_at DESC LIMIT 1", (intake_id,)).fetchone()
             actions = turn['audit_json'] if turn else []
             changes = [a for a in actions if a.get('type') != 'align_direct_answer']
-            if len(changes) != 1 or changes[0].get('type') != 'save_field' or changes[0].get('field') == 'rfc':
+            if len(changes) != 1 or changes[0].get('type') not in ('save_field','defer_field') or changes[0].get('field') == 'rfc':
                 raise HTTPException(409, 'Solo puedes deshacer la última respuesta guardada en un campo')
             change = changes[0]
-            answer = conn.execute('SELECT updated_at FROM answers WHERE intake_id=%s AND participant_id=%s AND field_code=%s FOR UPDATE', (intake_id,change['target_id'],change['field'])).fetchone()
+            table='capture_pending_fields' if change['type']=='defer_field' else 'answers'
+            answer = conn.execute('SELECT updated_at FROM '+table+' WHERE intake_id=%s AND participant_id=%s AND field_code=%s FOR UPDATE', (intake_id,change['target_id'],change['field'])).fetchone()
             # Never remove a pre-existing answer that a model merely repeated.
             if not answer or answer['updated_at'] != turn['updated_at']:
                 raise HTTPException(409, 'Ese dato ya existía o cambió después; no se deshizo')
-            conn.execute('DELETE FROM answers WHERE intake_id=%s AND participant_id=%s AND field_code=%s', (intake_id,change['target_id'],change['field']))
+            conn.execute('DELETE FROM '+table+' WHERE intake_id=%s AND participant_id=%s AND field_code=%s', (intake_id,change['target_id'],change['field']))
             people = conversation_people(conn, intake_id)
             active = active_person(people, change['target_id'])
             response = {'reply': resume_reply(people,active), 'active_id': active, 'authorization_links': [],'stage':capture_stage(people,active),'progress':capture_progress(people)}
             conn.execute('UPDATE intakes SET capture_version=capture_version+1,capture_active_id=%s,updated_at=now() WHERE id=%s', (active,intake_id))
-            reversal = {'type':'undo_save_field','target_id':change['target_id'],'field':change['field'],'request_id':str(turn['request_id'])}
+            reversal = {'type':'undo_'+change['type'],'target_id':change['target_id'],'field':change['field'],'request_id':str(turn['request_id'])}
             conn.execute("INSERT INTO capture_turns(intake_id,request_id,user_message,status,response_json,audit_json) VALUES(%s,%s,%s,'complete',%s,%s)", (intake_id,uuid4(),'Deshacer última respuesta',psycopg.types.json.Jsonb(response),psycopg.types.json.Jsonb([reversal])))
     return response
 
