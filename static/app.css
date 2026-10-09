@@ -18,19 +18,17 @@
 @media(max-width:650px){.composer-support{align-items:start;gap:8px}.composer-support p{font-size:10px;max-width:170px}.composer-support .contact-inline{white-space:normal;text-align:center;font-size:10px;padding:7px 8px;max-width:145px}.header-actions .contact-cta{font-size:11px;padding:8px 11px}.workspace-session-actions button{padding:7px 10px;font-size:11px}.exit-screen{margin:8vh 14px;padding:26px}.exit-screen h1{font-size:27px}.exit-screen p{font-size:13px}}
 
 .quote-dialog{max-height:90dvh;overflow:auto;width:min(560px,calc(100% - 28px))}.quote-preview{padding:14px;border:1px solid #c8e6d3;border-radius:12px;background:var(--soft);font-size:13px}#quote-status{font-size:13px;color:var(--blue)}#quote-download{display:inline-block;margin:12px 0;padding:12px 16px;background:var(--blue);color:white;border-radius:10px}.welcome-actions{flex-wrap:wrap}
-/* Keep the current question with the answer, even when history has little room. */
-#prompt{font-size:14px;line-height:1.45;color:var(--ink);max-height:150px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+/* Leave room for the conversation while the mobile keyboard is open. */
 @media(max-width:650px){
   #customer-workspace{height:var(--client-viewport-height,100dvh);padding:8px}
   #customer-workspace .customer-main{height:100%;padding:12px;min-width:0}
   #answer{font-size:16px}
   #composer{padding-top:10px}
-  #prompt{max-height:min(150px,calc(var(--client-viewport-height,100dvh) * .35));margin-bottom:8px}
-  #customer-workspace:has(#answer:focus) .customer-main header{padding-bottom:8px}
-  #customer-workspace:has(#answer:focus) .portal-brand p,
-  #customer-workspace:has(#answer:focus) .header-actions,
-  #customer-workspace:has(#answer:focus) #capture-stage-label{display:none}
-  #customer-workspace:has(#answer:focus) #capture-progress{padding:8px 0}
-  #customer-workspace:has(#answer:focus) #capture-progress-bar{margin:7px 0 0}
-  #customer-workspace:has(#answer:focus) .composer-support{margin-bottom:8px}
+  #customer-workspace:has(#composer:focus-within) .customer-main header{padding-bottom:8px}
+  #customer-workspace:has(#composer:focus-within) .portal-brand p,
+  #customer-workspace:has(#composer:focus-within) .header-actions,
+  #customer-workspace:has(#composer:focus-within) #capture-stage-label{display:none}
+  #customer-workspace:has(#composer:focus-within) #capture-progress{padding:8px 0}
+  #customer-workspace:has(#composer:focus-within) #capture-progress-bar{margin:7px 0 0}
+  #customer-workspace:has(#composer:focus-within) .composer-support{margin-bottom:8px}
 }

@@ -7,7 +7,7 @@ const state = {step:'email', email:'', intake:null, pendingIntakeId:null, partic
 const labels = {razon_social:'¿Cuál es la razón social?', nombre:'¿Cuál es el nombre completo?', nombre_comercial:'¿Cuál es el nombre comercial?', pagina_web:'¿Cuál es su página web?', correo_contacto:'¿Cuál es el correo de contacto?', telefono:'¿Cuál es el teléfono?', actividad:'¿A qué se dedica?', ocupacion:'¿Cuál es su ocupación?',cargo:'¿Cuál es su cargo?'};
 function bubble(value,mine=false){const el=document.createElement('div');el.className='bubble'+(mine?' mine':'');el.textContent=value;convo.append(el);const area=document.querySelector('#conversation-scroll');if(area)area.scrollTop=area.scrollHeight;else el.scrollIntoView({block:'nearest'});}
 function authorization(url,id){if(!url)return false;state.pendingIntakeId=id;state.step='authorization_ack';const el=document.createElement('div');el.className='bubble';el.append('Para poder revisar tu información fiscal y de Buró de Crédito, es necesario completar las autorizaciones requeridas en Syntage: ');const link=document.createElement('a');link.href=url;link.textContent='Abrir autorización en Syntage';link.target='_blank';link.rel='noopener noreferrer';el.append(link);convo.append(el);ask('Puedes seguir capturando tus datos mientras realizas la autorización. Escribe OK para confirmar que viste este aviso y continuar. OK no sustituye la autorización en Syntage.');return true;}
-function ask(value,type='text'){bubble(value);prompt.textContent=value;field.type=type;field.value='';if(!document.querySelector('#customer-workspace')?.hidden)field.focus({preventScroll:true});}
+function ask(value,type='text'){bubble(value);prompt.textContent='Tu respuesta';field.type=type;field.value='';if(!document.querySelector('#customer-workspace')?.hidden)field.focus({preventScroll:true});}
 function status(value){notice.textContent=value;}
 function setCaptureProgress(label,completed,total,stage){const wrap=document.querySelector('#capture-progress');if(!wrap)return;wrap.hidden=false;document.querySelector('#capture-progress-label').textContent=label;document.querySelector('#capture-progress-count').textContent=total?completed+' de '+total+' · '+Math.round(completed/total*100)+'%':'100%';document.querySelector('#capture-progress-bar').value=total?Math.round(completed/total*100):100;document.querySelector('#capture-stage-label').textContent=stage;}
 function showConversation(out){if(out.progress)setCaptureProgress(out.progress.label,out.progress.completed,out.progress.total,'Solicitante → Representante → Accionistas → Avales → Documentos');state.pendingChatReply=null;state.currentQuestion=out.reply;if(out.stage==='documents'){state.step='documents';form.hidden=true;bubble(out.reply);loadDocuments().catch(error=>status(error.message));return;}state.step='conversation';form.hidden=false;const docs=document.querySelector('#documents');if(docs)docs.hidden=true;ask(out.reply);}
@@ -40,12 +40,24 @@ field.inputMode='email';
 // resize only the visual viewport rather than the CSS layout viewport.
 if(typeof window!=='undefined'){
   const viewport=window.visualViewport;
-  const fitWorkspace=()=>document.documentElement.style.setProperty('--client-viewport-height',(viewport?.height||window.innerHeight)+'px');
+  const fitWorkspace=()=>{
+    const area=document.querySelector('#conversation-scroll');
+    const atBottom=area&&area.scrollHeight-area.scrollTop-area.clientHeight<48;
+    document.documentElement.style.setProperty('--client-viewport-height',(viewport?.height||window.innerHeight)+'px');
+    if(atBottom)area.scrollTop=area.scrollHeight;
+  };
   fitWorkspace();
   window.addEventListener('resize',fitWorkspace);
   viewport?.addEventListener('resize',fitWorkspace);
 }
 document.querySelector('#start-application')?.addEventListener('click',()=>{document.querySelector('#welcome').hidden=true;document.querySelector('#customer-workspace').hidden=false;field.focus();});
+// Keep the keyboard and layout stable until the native click submits the form.
+// Do not submit on pointerdown: a drag or cancelled gesture must not send data.
+document.querySelector('#send-answer')?.addEventListener('pointerdown',event=>{
+  if(event.isPrimary!==false&&event.button===0&&document.activeElement===field){
+    event.preventDefault();
+  }
+});
 function contactIntent(value){const text=value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();if(/\bno\s+(?:(?:quiero|necesito|deseo)\s+(?:que\s+)?)?(?:me\s+|nos\s+)?(?:contact|llam|hablar|asesor)/.test(text))return false;return /\b(contactenme|contactame|llamenme|llamame)\b|\b(me|nos)\s+(contacte|contacten|contactaran|llame|llamen|llamaran|llamas|contactas)\b|\b(quiero|necesito|quisiera|puedo|pueden|podrian|prefiero|gustaria|deseo|solicito)\b.*\b(hablar|contactar|contactarme|contacten|llamar|llamarme|llamen|asesor|asesora|asesoria)\b|\b(hablar|comunicarme)\s+(con|a)\s+(alguien|una persona|un asesor|una asesora|el equipo)\b|\b(quiero|necesito|solicito)\s+(?:un\s+)?contacto[.!?]*$/.test(text);}
 const contactDialog=document.querySelector('#contact-dialog');
 let contactAttempt=null,contactBusy=false,contactSent=false,contactReturnFocus=null;

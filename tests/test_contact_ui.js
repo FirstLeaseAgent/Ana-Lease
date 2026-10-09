@@ -1,10 +1,19 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 function element(){return {textContent:'',value:'',hidden:false,disabled:false,children:[],handlers:{},type:'text',append(...items){this.children.push(...items);},replaceChildren(){this.children=[];},setAttribute(){},focus(){},scrollIntoView(){},addEventListener(n,fn){this.handlers[n]=fn;},showModal(){this.open=true;},close(){this.open=false;this.handlers.close?.();}};}
-const nodes={};for(const id of ['conversation','composer','answer','prompt','notice','documents','customer-workspace','welcome','start-application','contact-dialog','contact-form','contact-name','contact-phone','contact-status','send-contact','cancel-contact','exit-session','exit-screen','exit-title','capture-progress'])nodes['#'+id]=element();nodes['#customer-workspace'].hidden=true;nodes['#composer'].querySelector=()=>element();const help=element();let fails=true,n=0;const calls=[];
+const nodes={};for(const id of ['conversation','composer','answer','send-answer','prompt','notice','documents','customer-workspace','welcome','start-application','contact-dialog','contact-form','contact-name','contact-phone','contact-status','send-contact','cancel-contact','exit-session','exit-screen','exit-title','capture-progress'])nodes['#'+id]=element();nodes['#customer-workspace'].hidden=true;nodes['#composer'].querySelector=()=>element();const help=element();let fails=true,n=0;const calls=[];
 const ctx=vm.createContext({document:{activeElement:nodes['#answer'],querySelector:s=>nodes[s],querySelectorAll:()=>[help],createElement:element},crypto:{randomUUID:()=>String(++n)},fetch:async(path,opts)=>{calls.push({path,body:JSON.parse(opts.body)});if(path==='/contact-requests')return {ok:!fails,json:async()=>fails?{detail:'Intenta de nuevo'}:{ok:true}};return {ok:true,json:async()=>({reply:'Siguiente pregunta',stage:'capture'})};}});
 vm.runInContext(fs.readFileSync('static/app.js','utf8'),ctx);
 const run=s=>vm.runInContext(s,ctx),event={preventDefault(){}};
 (async()=>{
+ let cancelled=false;
+ nodes['#send-answer'].handlers.pointerdown({isPrimary:true,button:0,preventDefault(){cancelled=true;}});
+ assert.equal(cancelled,true,'A tap keeps focus on the answer until click');
+ assert.equal(calls.length,0,'Touching the button must not submit before click');
+ cancelled=false;
+ nodes['#send-answer'].handlers.pointerdown({isPrimary:true,button:2,preventDefault(){cancelled=true;}});
+ assert.equal(cancelled,false,'Secondary gestures keep their native behavior');
+ assert.equal(nodes['#prompt'].textContent,'Tu respuesta','The question is not repeated beside the answer');
+
  for(const text of ['Quiero que me contacten','Quisiera hablar con un asesor','¿Pueden llamarme?','Contáctenme','Necesito asesoría'])assert.equal(run('contactIntent('+JSON.stringify(text)+')'),true,text);
  for(const text of ['Es el mismo contacto','Mi teléfono es 5512345678','No quiero que me contacten','¿Qué es un aval?'])assert.equal(run('contactIntent('+JSON.stringify(text)+')'),false,text);
  nodes['#start-application'].handlers.click();assert.equal(nodes['#customer-workspace'].hidden,false);assert.equal(nodes['#welcome'].hidden,true);
